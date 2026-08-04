@@ -165,8 +165,7 @@ resource "null_resource" "sync_users" {
       "${path.module}/scripts/sftpctl" sync \
         --instance "${aws_instance.this.id}" \
         --document "${aws_ssm_document.sync_users.name}" \
-        --region "${data.aws_region.current.region}" \
-        --profile "${var.aws_profile}"
+        --region "${data.aws_region.current.region}"
     EOT
   }
 

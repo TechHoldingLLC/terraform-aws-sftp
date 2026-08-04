@@ -13,11 +13,6 @@ variable "tags" {
   default     = {}
 }
 
-variable "aws_profile" {
-  description = "AWS CLI profile the user-sync provisioner should use. Leave empty to use the ambient credentials, which is what CI does"
-  type        = string
-  default     = ""
-}
 
 #-----------------------------------------------------------------------------
 #  Network - supplied by the caller, never created here

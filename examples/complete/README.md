@@ -5,6 +5,7 @@ A working SFTP endpoint in the account's default VPC, with users loaded from
 
 ```bash
 terraform init
+export AWS_PROFILE=your-profile   # the apply-time sync shells out to the AWS CLI
 terraform apply -var 'name=sftp-example' -var 'aws_profile=your-profile'
 ```
 

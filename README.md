@@ -38,8 +38,7 @@ module "sftp_users" {
 module "sftp" {
   source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v0.0.1"
 
-  name        = var.prefix              # e.g. "myproject-dev"
-  aws_profile = var.aws_profile         # for the user-sync provisioner; "" in CI
+  name = var.prefix                     # e.g. "myproject-dev"
 
   vpc_id    = module.vpc.id
   subnet_id = element(module.subnet_public.public_subnet_ids, 0)
@@ -112,7 +111,6 @@ Required: `name`, `vpc_id`, `subnet_id`, `ami_id`.
 | `subnet_id` | string | **required** | Existing **public** subnet |
 | `ami_id` | string | **required** | AMI to launch. Must be Amazon Linux 2023 **arm64** |
 | `users` | object list | `[]` | Per-user config - see the users README |
-| `aws_profile` | string | `""` | CLI profile for the sync provisioner. Empty = ambient creds |
 | `allowed_cidr_blocks` | list(string) | `["0.0.0.0/0"]` | Who may reach the SFTP port. **Narrow this** |
 | `tags` | map(string) | `{}` | Extra tags, merged with provider `default_tags` |
 | `instance_type` | string | `"t4g.medium"` | Must be arm64 (Graviton) |

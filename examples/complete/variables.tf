@@ -11,7 +11,7 @@ variable "region" {
 }
 
 variable "aws_profile" {
-  description = "AWS CLI profile. Also used by the user-sync provisioner; leave empty in CI to use ambient credentials."
+  description = "AWS CLI profile for the provider. Also export it as AWS_PROFILE so the apply-time user sync can authenticate - Terraform does not pass provider credentials to subprocesses."
   type        = string
   default     = ""
 }

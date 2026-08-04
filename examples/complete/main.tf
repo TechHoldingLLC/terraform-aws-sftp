@@ -79,8 +79,7 @@ module "sftp_users" {
 module "sftp" {
   source = "../../"
 
-  name        = var.name
-  aws_profile = var.aws_profile
+  name = var.name
 
   vpc_id    = data.aws_vpc.default.id
   subnet_id = sort(data.aws_subnets.public.ids)[0]
