@@ -1,0 +1,3 @@
+username: acme-corp
+description: ACME nightly invoice drop — password auth
+enable_password: true

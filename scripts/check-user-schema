@@ -1,0 +1,61 @@
+#!/bin/bash
+#
+# The loader submodule keeps its own list of valid user keys, because Terraform silently
+# drops unrecognised keys when coercing a map to an object type and there is no way to
+# query a module's schema from outside it.
+#
+# That list duplicates the attribute names of the root module's `users` variable. Both
+# ship from one repo and one tag, so a consumer can never see them out of step — but a
+# maintainer adding a field to one and forgetting the other would ship a loader that
+# rejects valid config. This closes that gap.
+#
+# Run from the repo root. Exits non-zero on any difference.
+#
+set -Eeuo pipefail
+
+cd "$(dirname "$0")/.."
+
+ROOT_VARS="variables.tf"
+LOADER="modules/users-from-yaml/main.tf"
+
+# Attribute names inside `variable "users" { type = list(object({ ... })) }`
+schema_keys() {
+  python3 - "$ROOT_VARS" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+block = re.search(r'variable "users" \{.*?type\s*=\s*list\(object\(\{(.*?)\}\)\)', src, re.S)
+if not block:
+    sys.exit("could not locate the users object type in " + sys.argv[1])
+for name in re.findall(r'^\s*([a-z0-9_]+)\s*=', block.group(1), re.M):
+    print(name)
+PY
+}
+
+# Entries of local.allowed_user_keys
+loader_keys() {
+  python3 - "$LOADER" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+block = re.search(r'allowed_user_keys\s*=\s*\[(.*?)\]', src, re.S)
+if not block:
+    sys.exit("could not locate allowed_user_keys in " + sys.argv[1])
+for name in re.findall(r'"([a-z0-9_]+)"', block.group(1)):
+    print(name)
+PY
+}
+
+A="$(schema_keys | sort)"
+B="$(loader_keys | sort)"
+
+if [[ "$A" == "$B" ]]; then
+  echo "user schema in sync: $(wc -l <<<"$A" | tr -d ' ') keys"
+  exit 0
+fi
+
+echo "FATAL: the users schema and the loader's allowed_user_keys have diverged."
+echo
+comm -23 <(echo "$A") <(echo "$B") | sed 's/^/  in variables.tf but missing from the loader: /'
+comm -13 <(echo "$A") <(echo "$B") | sed 's/^/  in the loader but not a real attribute:    /'
+echo
+echo "Add the field to both $ROOT_VARS and $LOADER."
+exit 1

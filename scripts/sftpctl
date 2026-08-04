@@ -1,0 +1,343 @@
+#!/bin/bash
+#
+# sftpctl — day-to-day operations against an SFTP endpoint created by
+# terraform-aws-sftp.
+#
+# Reads `terraform output -json` (or `terragrunt output --json`) on stdin, so it does not
+# care which tool you use or which directory you run it from:
+#
+#   terraform output -json | sftpctl info
+#   make tfoutput | sftpctl password --user acme-corp
+#
+# It accepts three output shapes, so a consumer can expose the module however they like:
+#
+#   1. one object output   output "sftp" { value = module.sftp }   ->  .sftp.value.endpoint
+#   2. flat, prefixed      output "sftp_endpoint" { ... }          ->  .sftp_endpoint.value
+#   3. flat, bare          output "endpoint" { ... }               ->  .endpoint.value
+#
+set -Eeuo pipefail
+
+SELF="$(basename "$0")"
+
+usage() {
+  cat <<EOF
+$SELF — operate an SFTP endpoint built by terraform-aws-sftp
+
+Usage:
+  <outputs json> | $SELF <command> [options]
+
+Commands:
+  info              endpoint, port, bucket, users, and host key fingerprints
+  admin             open an SSM tunnel to the admin panel, printing credentials first
+  admin-password    the web admin username and password
+  password          one user's generated password        (needs --user)
+  hostkeys          SSH host key fingerprints, to give partners out-of-band
+  known-hosts       known_hosts lines a partner can pre-pin
+  shell             a shell on the host over SSM
+  logs              tail the SFTPGo log
+  sync              push user changes to the running service
+
+Options:
+  --profile NAME    AWS CLI profile
+  --region NAME     AWS region
+  --user NAME       username, for \`password\`
+  --prefix NAME     output prefix to look for (default: sftp)
+  --outputs FILE    read outputs from FILE instead of stdin
+  --local-port N    local port for \`admin\` (default: 8080)
+  --instance ID     instance id, instead of reading it from outputs
+  --document NAME   SSM document name, instead of reading it from outputs
+  -h, --help        this
+
+The Terraform provisioner calls \`sync --instance … --document …\`, which needs no
+outputs at all. Everything else reads them from stdin.
+
+Examples:
+  terraform output -json | $SELF info
+  make tfoutput | $SELF password --user acme-corp
+  make tfoutput | $SELF admin --profile dev --region us-west-2
+EOF
+}
+
+[[ $# -eq 0 ]] && { usage; exit 1; }
+
+CMD="$1"; shift
+[[ "$CMD" == "-h" || "$CMD" == "--help" ]] && { usage; exit 0; }
+
+PROFILE="" REGION="" USERNAME="" PREFIX="sftp" OUTPUTS_FILE="" LOCAL_PORT="8080"
+INSTANCE_ARG="" DOCUMENT_ARG=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)    PROFILE="${2:-}"; shift 2 ;;
+    --region)     REGION="${2:-}"; shift 2 ;;
+    --user)       USERNAME="${2:-}"; shift 2 ;;
+    --prefix)     PREFIX="${2:-}"; shift 2 ;;
+    --outputs)    OUTPUTS_FILE="${2:-}"; shift 2 ;;
+    --local-port) LOCAL_PORT="${2:-}"; shift 2 ;;
+    --instance)   INSTANCE_ARG="${2:-}"; shift 2 ;;
+    --document)   DOCUMENT_ARG="${2:-}"; shift 2 ;;
+    -h|--help)    usage; exit 0 ;;
+    *)            echo "$SELF: unknown option '$1'" >&2; exit 1 ;;
+  esac
+done
+
+#-----------------------------------------------------------------------------
+#  Outputs
+#-----------------------------------------------------------------------------
+# Drained up front so stdin is free again — `admin` and `shell` are interactive and
+# need the terminal back, not the pipe we were handed.
+if [[ -n "$OUTPUTS_FILE" ]]; then
+  OUTPUTS_JSON="$(cat -- "$OUTPUTS_FILE")"
+elif [[ ! -t 0 ]]; then
+  # Something is piped in. Read it all so stdin is free again.
+  OUTPUTS_JSON="$(cat)"
+else
+  # No pipe, no file — fine as long as everything needed came in as a flag, which is
+  # how the Terraform provisioner invokes `sync`.
+  OUTPUTS_JSON=""
+fi
+
+# Looks up one field across the three supported output shapes and reports every name it
+# tried when it fails — the difference between a two-minute and a thirty-minute debug.
+get() {
+  local field="$1" required="${2:-required}"
+  local value
+
+  [[ -n "${OUTPUTS_JSON//[[:space:]]/}" ]] || {
+    if [[ "$required" == "required" ]]; then
+      echo "$SELF: need '$field' but no output JSON was given." >&2
+      echo "Pipe \`terraform output -json\` in, or use --outputs FILE." >&2
+      exit 1
+    fi
+    return 1
+  }
+
+  value="$(
+    OUTPUTS_JSON="$OUTPUTS_JSON" PREFIX="$PREFIX" FIELD="$field" python3 - <<'PY'
+import json, os, sys
+
+data = json.loads(os.environ["OUTPUTS_JSON"])
+prefix, field = os.environ["PREFIX"], os.environ["FIELD"]
+
+def unwrap(v):
+    return v.get("value") if isinstance(v, dict) and "value" in v else v
+
+# 1. one object output:  output "sftp" { value = module.sftp }
+holder = unwrap(data.get(prefix)) if prefix in data else None
+if isinstance(holder, dict) and field in holder:
+    val = holder[field]
+# 2. flat, prefixed:     output "sftp_endpoint"
+elif f"{prefix}_{field}" in data:
+    val = unwrap(data[f"{prefix}_{field}"])
+# 3. flat, bare:         output "endpoint"   (module used directly at the root)
+elif field in data:
+    val = unwrap(data[field])
+else:
+    sys.exit(1)
+
+if val is None:
+    sys.exit(1)
+print(val if isinstance(val, str) else json.dumps(val))
+PY
+  )" || {
+    if [[ "$required" == "required" ]]; then
+      cat >&2 <<EOF
+$SELF: could not find '$field' in the output JSON.
+
+Looked for, in order:
+  .$PREFIX.value.$field   (one object output)
+  .${PREFIX}_$field.value   (flat, prefixed)
+  .$field.value   (flat, bare)
+
+Expose the module's outputs in your root module. The least effort is one block:
+
+  output "$PREFIX" {
+    value = module.sftp
+  }
+
+Or pass --prefix NAME if you used a different one.
+EOF
+      exit 1
+    fi
+    return 1
+  }
+  printf '%s' "$value"
+}
+
+aws_() {
+  local args=()
+  [[ -n "$REGION" ]] && args+=(--region "$REGION")
+  [[ -n "$PROFILE" ]] && args+=(--profile "$PROFILE")
+  aws "$@" "${args[@]}"
+}
+
+# Reattach the terminal for interactive subcommands. Without this they inherit the
+# outputs pipe as stdin and `aws ssm start-session` cannot allocate a TTY.
+reattach_tty() {
+  # Probe in a subshell: /dev/tty exists as a device node even with no controlling
+  # terminal, so testing for the file is not enough — the redirect itself must work.
+  if ( : < /dev/tty ) 2>/dev/null; then
+    exec < /dev/tty
+  else
+    echo "$SELF: '$CMD' is interactive and needs a controlling terminal." >&2
+    echo "Run it from a shell rather than a script, pipeline or CI job." >&2
+    exit 1
+  fi
+}
+
+secret_json() {
+  aws_ secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text
+}
+
+print_admin_creds() {
+  secret_json "$(get admin_secret_arn)" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print("username: " + d["username"])
+print("password: " + d["password"])'
+}
+
+fingerprints() {
+  local tmp; tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  get host_public_keys | python3 -c 'import json,sys; [print(v) for v in json.load(sys.stdin).values()]' \
+    > "$tmp/keys"
+  while read -r key; do
+    [[ -n "$key" ]] || continue
+    printf '%s\n' "$key" > "$tmp/k.pub"
+    ssh-keygen -lf "$tmp/k.pub"
+  done < "$tmp/keys"
+}
+
+#-----------------------------------------------------------------------------
+#  Commands
+#-----------------------------------------------------------------------------
+case "$CMD" in
+
+  info)
+    python3 - <<PY
+import json
+print(json.dumps({
+    "endpoint": "$(get endpoint)",
+    "port":     $(get port),
+    "bucket":   "$(get bucket_name)",
+    "users":    json.loads('''$(get usernames)'''),
+}, indent=2))
+PY
+    echo "--- host key fingerprints ---"
+    fingerprints
+    ;;
+
+  admin-password)
+    print_admin_creds
+    ;;
+
+  admin)
+    instance="$(get instance_id)"
+    echo "--- credentials ---"
+    print_admin_creds
+    echo "--- open http://localhost:$LOCAL_PORT/web/admin   (ctrl-c here to close) ---"
+    reattach_tty
+    aws_ ssm start-session --target "$instance" \
+      --document-name AWS-StartPortForwardingSession \
+      --parameters "{\"portNumber\":[\"8080\"],\"localPortNumber\":[\"$LOCAL_PORT\"]}"
+    ;;
+
+  password)
+    [[ -n "$USERNAME" ]] || { echo "$SELF: password needs --user NAME" >&2; exit 1; }
+    secret_json "$(get passwords_secret_arn)" \
+      | USERNAME="$USERNAME" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+u = os.environ["USERNAME"]
+if u not in d:
+    have = ", ".join(sorted(d)) or "none"
+    sys.exit("sftpctl: no password for " + repr(u) + ". Users with a password: " + have)
+print(d[u])'
+    ;;
+
+  hostkeys)
+    fingerprints
+    ;;
+
+  known-hosts)
+    endpoint="$(get endpoint)"
+    get host_public_keys \
+      | ENDPOINT="$endpoint" python3 -c '
+import json, os, sys
+for v in json.load(sys.stdin).values():
+    print(os.environ["ENDPOINT"], v)'
+    ;;
+
+  shell)
+    instance="$(get instance_id)"
+    reattach_tty
+    aws_ ssm start-session --target "$instance"
+    ;;
+
+  logs)
+    aws_ logs tail "$(get log_group_name)" --follow
+    ;;
+
+  sync)
+    # Called two ways: by the Terraform provisioner with --instance/--document (no
+    # outputs available at that point), and by an operator with outputs piped in.
+    instance="${INSTANCE_ARG:-$(get instance_id)}"
+    document="${DOCUMENT_ARG:-$(get sync_document_name)}"
+    : "${REGION:?sync needs --region}"
+
+    say() { echo "[sftpctl sync] $*"; }
+
+    # A freshly created instance takes a minute or so to register with SSM. Without
+    # this, the first apply after a rebuild races the agent and fails for no real reason.
+    say "waiting for $instance to register with SSM"
+    ping=""
+    for _ in $(seq 1 30); do
+      ping="$(aws_ ssm describe-instance-information \
+        --filters "Key=InstanceIds,Values=$instance" \
+        --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || echo None)"
+      [[ "$ping" == "Online" ]] && break
+      sleep 10
+    done
+    [[ "$ping" == "Online" ]] || { say "FATAL: $instance never came Online in SSM after 5 minutes"; exit 1; }
+
+    say "sending $document"
+    cmd_id="$(aws_ ssm send-command \
+      --instance-ids "$instance" --document-name "$document" \
+      --query 'Command.CommandId' --output text)"
+
+    say "command $cmd_id dispatched, waiting"
+    status="Pending"
+    for _ in $(seq 1 40); do
+      status="$(aws_ ssm get-command-invocation \
+        --command-id "$cmd_id" --instance-id "$instance" \
+        --query 'Status' --output text 2>/dev/null || echo Pending)"
+      case "$status" in
+        Success|Failed|Cancelled|TimedOut) break ;;
+      esac
+      sleep 5
+    done
+
+    out="$(aws_ ssm get-command-invocation --command-id "$cmd_id" --instance-id "$instance" \
+      --query 'StandardOutputContent' --output text 2>/dev/null || true)"
+    [[ -n "$out" ]] && sed 's/^/  /' <<<"$out"
+
+    if [[ "$status" != "Success" ]]; then
+      err="$(aws_ ssm get-command-invocation --command-id "$cmd_id" --instance-id "$instance" \
+        --query 'StandardErrorContent' --output text 2>/dev/null || true)"
+      [[ -n "$err" ]] && sed 's/^/  stderr: /' <<<"$err"
+      say "FATAL: sync failed with status $status"
+      say "retry with: make sftp-sync"
+      exit 1
+    fi
+
+    say "users and admins are in step with Terraform"
+    ;;
+
+  *)
+    echo "$SELF: unknown command '$CMD'" >&2
+    echo >&2
+    usage >&2
+    exit 1
+    ;;
+esac

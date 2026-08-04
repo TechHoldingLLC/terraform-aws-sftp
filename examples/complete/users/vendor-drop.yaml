@@ -1,0 +1,7 @@
+username: vendor-drop
+description: One-way ingest — sees filenames, cannot download
+enable_password: true
+permissions:
+  - list        # required, or GUI clients fail on connect
+  - upload
+  - overwrite   # required, or re-sending the same filename fails
