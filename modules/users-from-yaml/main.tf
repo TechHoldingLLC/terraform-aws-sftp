@@ -12,7 +12,7 @@ locals {
   # This exists because Terraform silently DROPS unrecognised keys when coercing a map
   # to an object type. Without this check, `permissons: [list]` would be ignored and the
   # user would quietly receive the module's default permissions instead of the
-  # restricted set you intended — wrong access, clean plan, no warning.
+  # restricted set you intended - wrong access, clean plan, no warning.
   #
   # Kept in step with the parent module by .github/workflows/validate.yml, which fails
   # if the two lists diverge.

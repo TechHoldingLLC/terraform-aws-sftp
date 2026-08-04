@@ -12,7 +12,7 @@ resource "aws_cloudwatch_log_group" "sftpgo" {
 # Single instance, so a failed status check means the endpoint is down.
 resource "aws_cloudwatch_metric_alarm" "status_check" {
   alarm_name          = "${var.name}-sftp-status-check-failed"
-  alarm_description   = "SFTP host failing EC2 status checks — the endpoint is down"
+  alarm_description   = "SFTP host failing EC2 status checks - the endpoint is down"
   namespace           = "AWS/EC2"
   metric_name         = "StatusCheckFailed"
   statistic           = "Maximum"
@@ -34,7 +34,7 @@ resource "aws_cloudwatch_metric_alarm" "status_check" {
 # fails uploads while the service still looks healthy.
 resource "aws_cloudwatch_metric_alarm" "disk_used" {
   alarm_name          = "${var.name}-sftp-disk-used"
-  alarm_description   = "SFTP host root volume over ${var.disk_used_alarm_threshold}% — transfers will start failing"
+  alarm_description   = "SFTP host root volume over ${var.disk_used_alarm_threshold}% - transfers will start failing"
   namespace           = "CWAgent"
   metric_name         = "disk_used_percent"
   statistic           = "Maximum"
@@ -55,7 +55,7 @@ resource "aws_cloudwatch_metric_alarm" "disk_used" {
 # cpu_credits = "unlimited" trades throttling for billed surplus credits. This makes that spend visible
 resource "aws_cloudwatch_metric_alarm" "cpu_surplus_credits" {
   alarm_name          = "${var.name}-sftp-cpu-surplus-credits-charged"
-  alarm_description   = "Being billed for surplus CPU credits — sustained load has outgrown ${var.instance_type}, consider c7g.large"
+  alarm_description   = "Being billed for surplus CPU credits - sustained load has outgrown ${var.instance_type}, consider c7g.large"
   namespace           = "AWS/EC2"
   metric_name         = "CPUSurplusCreditsCharged"
   statistic           = "Sum"
@@ -73,7 +73,7 @@ resource "aws_cloudwatch_metric_alarm" "cpu_surplus_credits" {
   tags = var.tags
 }
 
-# Catches a failed user import or an S3 denial — the port stays open but
+# Catches a failed user import or an S3 denial - the port stays open but
 # transfers are broken.
 resource "aws_cloudwatch_log_metric_filter" "errors" {
   name           = "${var.name}-sftp-errors"
@@ -91,7 +91,7 @@ resource "aws_cloudwatch_log_metric_filter" "errors" {
 
 resource "aws_cloudwatch_metric_alarm" "errors" {
   alarm_name          = "${var.name}-sftp-errors"
-  alarm_description   = "Errors in the SFTPGo log — check for a failed user import or S3 access denial"
+  alarm_description   = "Errors in the SFTPGo log - check for a failed user import or S3 access denial"
   namespace           = "SFTP"
   metric_name         = aws_cloudwatch_log_metric_filter.errors.metric_transformation[0].name
   statistic           = "Sum"

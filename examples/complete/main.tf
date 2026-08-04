@@ -1,5 +1,5 @@
 ####################################################
-#  Complete example — SFTP endpoint with YAML users #
+#  Complete example - SFTP endpoint with YAML users #
 ####################################################
 #
 # Deploys a working SFTP endpoint into the account's default VPC, with users loaded
@@ -36,7 +36,7 @@ provider "aws" {
 }
 
 #----------------------------------------------------------------------------
-#  Networking and AMI — inputs to the module, never created by it
+#  Networking and AMI - inputs to the module, never created by it
 #----------------------------------------------------------------------------
 
 data "aws_vpc" "default" {
@@ -68,7 +68,7 @@ data "aws_ssm_parameter" "al2023_arm64" {
 module "sftp_users" {
   source = "../../modules/users-from-yaml"
 
-  # Root-relative, not a bare "users" — see the submodule README.
+  # Root-relative, not a bare "users" - see the submodule README.
   path = "${path.root}/users"
 }
 

@@ -54,7 +54,7 @@ resource "random_password" "admin" {
 }
 
 # The SFTPGo backup document. Passwords go in here and the whole thing goes to
-# Secrets Manager — never to user_data, which is readable via IMDS.
+# Secrets Manager - never to user_data, which is readable via IMDS.
 resource "aws_secretsmanager_secret" "users" {
   name                    = "${var.name}-sftp-users"
   description             = "SFTPGo loaddata document for ${var.name}"

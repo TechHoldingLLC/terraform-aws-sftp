@@ -178,7 +178,7 @@ Environment="SFTPGO_LOADDATA_MODE=0"
 Environment="SFTPGO_LOADDATA_CLEAN=1"
 Environment="SFTPGO_CONFIG_DIR=$SFTPGO_ETC"
 
-# Logging has no sftpgo.json section — it is flag/env driven only, so it is
+# Logging has no sftpgo.json section - it is flag/env driven only, so it is
 # configured here rather than in the config file.
 Environment="SFTPGO_LOG_FILE_PATH=$SFTPGO_LOG_DIR/sftpgo.log"
 Environment="SFTPGO_LOG_MAX_SIZE=10"
@@ -282,7 +282,7 @@ systemctl is-active --quiet sftpgo.service \
 # 10. Post-start assertions
 #-----------------------------------------------------------------------------
 # systemd reports active as soon as the process forks, which is well before the
-# listener binds and the import finishes — so every check here polls rather than
+# listener binds and the import finishes - so every check here polls rather than
 # reading state once.
 SFTP_PORT="$(jq -r '.sftpd.bindings[0].port' "$SFTPGO_ETC/sftpgo.json")"
 
@@ -290,10 +290,10 @@ SFTP_PORT="$(jq -r '.sftpd.bindings[0].port' "$SFTPGO_ETC/sftpgo.json")"
 # does so without complaint: the endpoint comes up healthy serving a fingerprint
 # no partner has pinned.
 if compgen -G "$SFTPGO_ETC/id_*" > /dev/null; then
-  fail "SFTPGo generated host keys in $SFTPGO_ETC — configured host_keys did not resolve to $SFTPGO_VAR. Partners would see an unexpected fingerprint."
+  fail "SFTPGo generated host keys in $SFTPGO_ETC - configured host_keys did not resolve to $SFTPGO_VAR. Partners would see an unexpected fingerprint."
 fi
 
-# First non-empty line only — a stray blank line would otherwise add a second
+# First non-empty line only - a stray blank line would otherwise add a second
 # record and make the comparison fail against a key that is actually correct.
 EXPECTED_KEY="$(awk 'NF {print $1" "$2; exit}' "$SFTPGO_VAR/id_ed25519.pub")"
 SERVED_KEY=""
@@ -310,7 +310,7 @@ done
 log "Verified: listener up on port $SFTP_PORT, serving the host key from Secrets Manager"
 
 # loaddata runs asynchronously at startup and its failures are logged without
-# stopping the daemon — the port would be open with nobody able to log in.
+# stopping the daemon - the port would be open with nobody able to log in.
 # SFTPGO_LOADDATA_CLEAN removes the file only after a successful import, so its
 # disappearance is the success signal.
 for _ in $(seq 1 20); do
@@ -319,7 +319,7 @@ for _ in $(seq 1 20); do
 done
 
 if [[ -f "$USERS_FILE" ]]; then
-  fail "$USERS_FILE still present after 40s — the user import failed. Check: journalctl -u sftpgo | grep -i loaddata"
+  fail "$USERS_FILE still present after 40s - the user import failed. Check: journalctl -u sftpgo | grep -i loaddata"
 fi
 log "Verified: user import completed and the plaintext document was removed"
 

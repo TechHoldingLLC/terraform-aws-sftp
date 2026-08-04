@@ -4,7 +4,7 @@ Loads SFTP users from **one YAML file per user** and validates them, so a typo f
 `terraform plan` instead of silently granting the wrong access.
 
 Emits raw maps for the parent module's typed `users` variable. It applies **no
-defaults** — the parent does that — so defaults live in exactly one place.
+defaults** - the parent does that - so defaults live in exactly one place.
 
 Optional. If you have two users and no need for a directory, pass `users` to the parent
 module as inline HCL instead and skip this. See `examples/inline-users/`.
@@ -13,12 +13,12 @@ module as inline HCL instead and skip this. See `examples/inline-users/`.
 
 ```hcl
 module "sftp_users" {
-  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git//modules/users-from-yaml?ref=v1.0.0"
+  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git//modules/users-from-yaml?ref=v0.0.1"
   path   = "${path.root}/users"
 }
 
 module "sftp" {
-  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v1.0.0"
+  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v0.0.1"
 
   name      = var.prefix
   vpc_id    = module.vpc.id
@@ -57,7 +57,7 @@ directory travels with it, so `${path.root}/users` resolves correctly there too.
 
 # Managing users
 
-**One YAML file per user.** The filename must match the `username` inside it —
+**One YAML file per user.** The filename must match the `username` inside it -
 `globex.yaml` declares `username: globex`. Onboarding a partner is adding a file,
 offboarding is deleting one, and `git log users/globex.yaml` is that partner's access
 history.
@@ -75,16 +75,16 @@ enable_password: true
 description: ACME nightly invoice drop
 EOF
 
-# 2. review — the instance should NOT be replaced
+# 2. review - the instance should NOT be replaced
 terraform plan
 
-# 3. apply — this also pushes the change to the running server
+# 3. apply - this also pushes the change to the running server
 terraform apply
 ```
 
 Also add the partner's egress IPs to the sftp module's `allowed_cidr_blocks`. The
 security group is allowlisted, so a partner whose IP is missing gets a **timeout**, not
-an auth error — the most common onboarding failure by a wide margin.
+an auth error - the most common onboarding failure by a wide margin.
 
 ## Field reference
 
@@ -113,7 +113,7 @@ Watch the units: `quota_size` is **bytes**, bandwidth is **KB/s**, `expiration_d
 ### `permissions`
 
 Default is `list`, `download`, `upload`, `overwrite`, `delete`, `rename`,
-`create_dirs` — ordinary read/write.
+`create_dirs` - ordinary read/write.
 
 | Value | Allows |
 |---|---|
@@ -131,12 +131,12 @@ Default is `list`, `download`, `upload`, `overwrite`, `delete`, `rename`,
 | `chmod` / `chown` / `chtimes` | permission and timestamp changes |
 
 `chmod`, `chown`, `chtimes` and `create_symlinks` are left out of the default
-deliberately — the first three are meaningless on object storage, and symlinks are a
+deliberately - the first three are meaningless on object storage, and symlinks are a
 path-escape vector.
 
 **Two permission traps that generate support tickets:**
 
-- **Omitting `list`** — the partner authenticates fine and then their client fails.
+- **Omitting `list`** - the partner authenticates fine and then their client fails.
   GUI clients (FileZilla, Cyberduck, WinSCP) request a directory listing immediately on
   connect, so without `list` they report the whole connection as broken:
   ```
@@ -144,7 +144,7 @@ path-escape vector.
   Error: Failed to retrieve directory listing
   ```
   A CLI client would connect, fail on `ls`, and still upload.
-- **`upload` without `overwrite`** — the first upload of a filename works and every
+- **`upload` without `overwrite`** - the first upload of a filename works and every
   retry fails. Bites partners who re-send a daily `invoices.csv`.
 
 ---
@@ -153,7 +153,7 @@ path-escape vector.
 
 Each block is the entire contents of one file.
 
-### Password auth — the common case
+### Password auth - the common case
 
 ```yaml
 username: acme-corp
@@ -174,7 +174,7 @@ public_keys:
   - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... ops@globex.com
 ```
 
-No password is generated. The partner generates the keypair — see
+No password is generated. The partner generates the keypair - see
 [Key handover](#key-handover).
 
 ### Both password and key
@@ -195,14 +195,14 @@ Can deposit files but not download anyone's contents.
 ```yaml
 username: vendor-drop
 enable_password: true
-description: One-way ingest — sees filenames, cannot download
+description: One-way ingest - sees filenames, cannot download
 permissions:
   - list
   - upload
   - overwrite
 ```
 
-If you genuinely need filenames hidden, drop to just `- upload` — but then **no GUI
+If you genuinely need filenames hidden, drop to just `- upload` - but then **no GUI
 client can be used**, only automation doing blind `put`s. You cannot have both hidden
 filenames and FileZilla.
 
@@ -241,7 +241,7 @@ username: secure-partner
 enable_password: true
 description: Only from the partner's documented egress ranges
 allowed_ip:
-  - 203.0.113.0/24     # replace — RFC 5737 doc range, never routable
+  - 203.0.113.0/24     # replace - RFC 5737 doc range, never routable
 ```
 
 **Two independent layers.** `allowed_cidr_blocks` (security group) controls who
@@ -264,7 +264,7 @@ key_prefix: shared/inbound/
 enable_password: true
 ```
 
-Both see the same directory — including each other's files.
+Both see the same directory - including each other's files.
 
 ### Time-limited access
 
@@ -279,7 +279,7 @@ expiration_date: 1767225600000   # 2026-01-01T00:00:00Z
 ```
 
 ```bash
-# macOS — give the full time, or it inherits the current time-of-day
+# macOS - give the full time, or it inherits the current time-of-day
 date -u -j -f '%Y-%m-%d %H:%M:%S' '2026-01-01 00:00:00' +%s000
 # GNU / Linux
 date -u -d '2026-01-01' +%s000
@@ -306,7 +306,7 @@ service. **No instance replacement and no downtime.**
 The push is `null_resource.sync_users` in the module: it triggers on the secret's
 `version_id` and runs the `-sftp-sync-users` SSM document on the host, which fetches
 the document and `POST`s it to `http://127.0.0.1:8080/api/v2/loaddata?mode=0`. SFTPGo
-applies it live — no restart, so active transfers are not interrupted. Takes a couple
+applies it live - no restart, so active transfers are not interrupted. Takes a couple
 of seconds.
 
 Because the command runs *on* the instance, the admin API stays bound to loopback and
@@ -324,7 +324,7 @@ loaddata OK: {"message":"Data restored"}
     upload_only   prefix=reports/       status=1
 ```
 
-**If the sync fails, the apply fails** — deliberately, so Terraform never claims to
+**If the sync fails, the apply fails** - deliberately, so Terraform never claims to
 have converged when it hasn't. Retry with `make sftp-sync`, or re-run the SSM document by hand. That is also how you
 recover the admin account if it is ever deleted, without a rebuild.
 
@@ -333,7 +333,7 @@ recover the admin account if it is ever deleted, without a rebuild.
 Only for host-level changes: `ami_id`, `instance_type`, `root_volume_size`,
 `sftp_port`, the SFTPGo tuning variables, or an explicit instance replacement. That
 costs ~2 minutes of downtime. The Elastic IP, host keys, bucket contents, admin and all
-users survive — none of them live on the host, so a fresh instance imports the current
+users survive - none of them live on the host, so a fresh instance imports the current
 document at boot.
 
 **If `make plan` wants to replace the instance after only a user change, stop and look
@@ -355,11 +355,11 @@ Before anything is created:
 - a `username` breaking `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`
 - a `key_prefix` not ending in `/`
 - `key_only` together with `password_only`
-- `key_only` with no `public_keys` — could never log in
-- neither `enable_password: true` nor any `public_keys` — same problem
+- `key_only` with no `public_keys` - could never log in
+- neither `enable_password: true` nor any `public_keys` - same problem
 
 What it does **not** catch: a misspelled *value*, like `permissions: [downlod]`.
-SFTPGo rejects that at import, so the sync fails and the apply fails — later, but not
+SFTPGo rejects that at import, so the sync fails and the apply fails - later, but not
 silently.
 
 ---
@@ -375,14 +375,14 @@ ssh-keygen -t ed25519 -f ~/.ssh/sftp-yourcompany -C "ops@partner.com"
 ```
 
 Paste that one line into `public_keys`. The private key never touches your
-infrastructure — that is the entire point of key auth.
+infrastructure - that is the entire point of key auth.
 
 **Public keys belong in git.** They are public by design; GitHub serves everyone's at
 `github.com/<user>.keys`. Committing them is correct and gives you a reviewable
 history of who has access. It is the *private* key that matters.
 
 **Don't generate client keys in Terraform.** It works, but the private key lands in
-state and you then have to transmit it to the partner — which throws away the
+state and you then have to transmit it to the partner - which throws away the
 advantage and leaves you a secret to look after.
 
 One formatting trap: keep each key on a single line under `- `. YAML will fold a long
@@ -404,7 +404,7 @@ line if you indent oddly, and a mangled key fails auth with no obvious error.
 The root README ships `make sftp-info`, `sftp-password`, `sftp-hostkeys` and
 `sftp-known-hosts` wrappers for these.
 
-The `known_hosts` line is **optional for a human** with a GUI client — they get a
+The `known_hosts` line is **optional for a human** with a GUI client - they get a
 trust-on-first-use prompt and click Accept. It is **required for automation**: a
 scripted `sftp` with the default `StrictHostKeyChecking=ask` hangs waiting for input
 that never arrives, and paramiko rejects outright.
@@ -418,24 +418,24 @@ can also swap the fingerprint in that same email.
 ## Offboarding
 
 **Deleting the file does not immediately revoke access.** The import runs with
-`SFTPGO_LOADDATA_MODE=0` — add new, update existing. It never deletes, so a removed
+`SFTPGO_LOADDATA_MODE=0` - add new, update existing. It never deletes, so a removed
 user keeps working until the next instance rebuild.
 
 It *does* take effect on a **rebuild**: a fresh instance starts with an empty database
 and imports only what is declared, so anyone no longer listed disappears. That makes
-an instance replacement a reconcile-and-purge — useful, but it costs ~2 minutes of downtime
+an instance replacement a reconcile-and-purge - useful, but it costs ~2 minutes of downtime
 and is easy to forget.
 
 Don't rely on that. To revoke now, pick one:
 
-1. **Expire them** — declarative, stays in git as a record. Keep the file; delete it
+1. **Expire them** - declarative, stays in git as a record. Keep the file; delete it
    later once you're sure.
    ```yaml
    username: old-partner
    enable_password: true
    expiration_date: 1
    ```
-2. **Delete in the admin panel** — port-forward to `127.0.0.1:8080`, then Users → delete. Immediate,
+2. **Delete in the admin panel** - port-forward to `127.0.0.1:8080`, then Users → delete. Immediate,
    but not recorded in Terraform, so also delete their `users/*.yaml` or the next apply
    recreates them.
 
@@ -451,10 +451,10 @@ their S3 prefix should be deleted or retained.
 | Connection **times out** | Their IP isn't in `allowed_cidr_blocks` |
 | `Permission denied` | Wrong password, or `key_only` with a key you didn't add |
 | Connects but directory is **empty** | `list` missing from `permissions` |
-| `SSH_FX_PERMISSION_DENIED` on connect | Same — `list` missing, GUI client can't get its initial listing |
+| `SSH_FX_PERMISSION_DENIED` on connect | Same - `list` missing, GUI client can't get its initial listing |
 | First upload works, retries fail | `overwrite` missing from `permissions` |
-| Locked out after a few tries | Brute-force defender — ~5 failed attempts triggers a 30 min ban |
-| New user can't log in after apply | The sync may have failed — `make sftp-sync`, then check the logs |
+| Locked out after a few tries | Brute-force defender - ~5 failed attempts triggers a 30 min ban |
+| New user can't log in after apply | The sync may have failed - `make sftp-sync`, then check the logs |
 
 ```bash
 make sftp-logs     # every auth attempt, with source IP
@@ -463,19 +463,7 @@ make sftp-admin    # panel: Connections, and Defender for the ban list
 
 (or `aws logs tail <log_group_name>` and an SSM port-forward to `127.0.0.1:8080`)
 
-**If the log shows no attempt at all, it never reached the server** — that's the
+**If the log shows no attempt at all, it never reached the server** - that's the
 security group or DNS, not SFTPGo.
 
 ---
-
-## Never edit these by hand
-
-| Thing | Why |
-|---|---|
-| The `*-sftp-users` secret | Generated by Terraform; manual edits are reverted on the next apply |
-| `/etc/sftpgo/sftpgo.json` on the host | Rendered into `user_data`; changing it in Terraform replaces the instance |
-| Users in the admin panel | The mode-0 import overwrites them on the next sync or rebuild |
-| `/var/lib/sftpgo/sftpgo.db` | Rebuilt from the Terraform document at every boot |
-
-Treat the admin panel as **read-only** — connection status, transfer history, quota
-usage, defender bans. Anything you want to persist belongs in a YAML file here.

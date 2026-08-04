@@ -5,7 +5,7 @@
 # query a module's schema from outside it.
 #
 # That list duplicates the attribute names of the root module's `users` variable. Both
-# ship from one repo and one tag, so a consumer can never see them out of step — but a
+# ship from one repo and one tag, so a consumer can never see them out of step - but a
 # maintainer adding a field to one and forgetting the other would ship a loader that
 # rejects valid config. This closes that gap.
 #

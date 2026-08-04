@@ -1,4 +1,4 @@
-# Raw maps, deliberately. No defaults are applied here — the parent module's typed
+# Raw maps, deliberately. No defaults are applied here - the parent module's typed
 # `users` variable does the coercion and applies every optional() default, so defaults
 # are defined in exactly one place and cannot drift between the two modules.
 output "users" {

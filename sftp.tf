@@ -23,7 +23,7 @@ resource "aws_instance" "this" {
     log_group_name      = aws_cloudwatch_log_group.sftpgo.name
 
     # Deliberately does NOT reference the users secret version. user_data is only
-    # about how to build a host, not which users exist — so adding a user no longer
+    # about how to build a host, not which users exist - so adding a user no longer
     # replaces the instance. Changes are pushed to the running service instead, see
     # sync.tf. A new host still imports the current document at boot.
 
@@ -57,7 +57,7 @@ resource "aws_instance" "this" {
         max_auth_tries = var.max_auth_tries
 
         # Absolute. SFTPGo resolves relative paths against /etc/sftpgo, which the
-        # systemd ProtectSystem=full mounts read-only — it would find no keys
+        # systemd ProtectSystem=full mounts read-only - it would find no keys
         # there and silently generate a new pair, changing the fingerprint.
         host_keys = ["/var/lib/sftpgo/id_ed25519", "/var/lib/sftpgo/id_rsa"]
 
@@ -97,7 +97,7 @@ resource "aws_instance" "this" {
         }
       }
 
-      # No "log" section — SFTPGo has none. Logging is set by SFTPGO_LOG_* env
+      # No "log" section - SFTPGo has none. Logging is set by SFTPGO_LOG_* env
       # vars in the systemd drop-in. Viper drops unknown keys silently, so a log
       # block here would look right and do nothing.
 

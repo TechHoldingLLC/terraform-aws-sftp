@@ -1,10 +1,10 @@
 #############################################################
-#  Minimal example — users inline, no users-from-yaml module #
+#  Minimal example - users inline, no users-from-yaml module #
 #############################################################
 #
 # The loader submodule is optional. With two or three stable users and no need for a
 # per-user file, pass `users` directly. You lose the key-name validation the loader
-# provides, so a typo is silently ignored — worth knowing before choosing this.
+# provides, so a typo is silently ignored - worth knowing before choosing this.
 
 terraform {
   required_version = ">= 1.14.0"

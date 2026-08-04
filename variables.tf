@@ -20,7 +20,7 @@ variable "aws_profile" {
 }
 
 #-----------------------------------------------------------------------------
-#  Network — supplied by the caller, never created here
+#  Network - supplied by the caller, never created here
 #-----------------------------------------------------------------------------
 
 variable "vpc_id" {

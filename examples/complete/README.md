@@ -26,7 +26,7 @@ while read -r K; do echo "$K" > /tmp/k.pub && ssh-keygen -lf /tmp/k.pub; done < 
 
 ## Before you use this for real
 
-- **`allowed_cidr_blocks` defaults to `0.0.0.0/0`.** Narrow it to partner egress IPs —
+- **`allowed_cidr_blocks` defaults to `0.0.0.0/0`.** Narrow it to partner egress IPs -
   an internet-facing SFTP port is the largest piece of attack surface in this design.
 - The three files in `users/` are illustrative. `globex.yaml` carries a placeholder
   public key and an RFC 5737 documentation CIDR, so it cannot be used as-is.
@@ -40,5 +40,5 @@ terraform destroy
 ```
 
 The bucket is created with `force_destroy = false`, so `destroy` fails if partners have
-uploaded anything. Empty it first, or set `bucket_force_destroy = true` on the module —
+uploaded anything. Empty it first, or set `bucket_force_destroy = true` on the module -
 and think about whether you mean it.

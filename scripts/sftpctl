@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# sftpctl — day-to-day operations against an SFTP endpoint created by
+# sftpctl - day-to-day operations against an SFTP endpoint created by
 # terraform-aws-sftp.
 #
 # Reads `terraform output -json` (or `terragrunt output --json`) on stdin, so it does not
@@ -21,7 +21,7 @@ SELF="$(basename "$0")"
 
 usage() {
   cat <<EOF
-$SELF — operate an SFTP endpoint built by terraform-aws-sftp
+$SELF - operate an SFTP endpoint built by terraform-aws-sftp
 
 Usage:
   <outputs json> | $SELF <command> [options]
@@ -84,7 +84,7 @@ done
 #-----------------------------------------------------------------------------
 #  Outputs
 #-----------------------------------------------------------------------------
-# Drained up front so stdin is free again — `admin` and `shell` are interactive and
+# Drained up front so stdin is free again - `admin` and `shell` are interactive and
 # need the terminal back, not the pipe we were handed.
 if [[ -n "$OUTPUTS_FILE" ]]; then
   OUTPUTS_JSON="$(cat -- "$OUTPUTS_FILE")"
@@ -92,13 +92,13 @@ elif [[ ! -t 0 ]]; then
   # Something is piped in. Read it all so stdin is free again.
   OUTPUTS_JSON="$(cat)"
 else
-  # No pipe, no file — fine as long as everything needed came in as a flag, which is
+  # No pipe, no file - fine as long as everything needed came in as a flag, which is
   # how the Terraform provisioner invokes `sync`.
   OUTPUTS_JSON=""
 fi
 
 # Looks up one field across the three supported output shapes and reports every name it
-# tried when it fails — the difference between a two-minute and a thirty-minute debug.
+# tried when it fails - the difference between a two-minute and a thirty-minute debug.
 get() {
   local field="$1" required="${2:-required}"
   local value
@@ -175,7 +175,7 @@ aws_() {
 # outputs pipe as stdin and `aws ssm start-session` cannot allocate a TTY.
 reattach_tty() {
   # Probe in a subshell: /dev/tty exists as a device node even with no controlling
-  # terminal, so testing for the file is not enough — the redirect itself must work.
+  # terminal, so testing for the file is not enough - the redirect itself must work.
   if ( : < /dev/tty ) 2>/dev/null; then
     exec < /dev/tty
   else
