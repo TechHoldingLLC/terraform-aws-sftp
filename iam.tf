@@ -91,21 +91,6 @@ data "aws_iam_policy_document" "instance" {
 
     resources = ["${aws_cloudwatch_log_group.sftpgo.arn}:*"]
   }
-
-  # The CloudWatch agent publishes the disk and memory metrics the alarms use.
-  # PutMetricData cannot be resource-scoped, so it is namespace-scoped instead.
-  statement {
-    sid       = "PublishAgentMetrics"
-    effect    = "Allow"
-    actions   = ["cloudwatch:PutMetricData"]
-    resources = ["*"]
-
-    condition {
-      test     = "StringEquals"
-      variable = "cloudwatch:namespace"
-      values   = ["CWAgent"]
-    }
-  }
 }
 
 resource "aws_iam_role_policy" "instance" {

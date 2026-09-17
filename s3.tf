@@ -8,7 +8,7 @@ module "s3" {
   name          = "${var.name}-sftp"
   force_destroy = var.bucket_force_destroy
 
-  versioning           = "Enabled"
+  versioning           = var.bucket_versioning ? "Enabled" : "Disabled"
   encryption_algorithm = "AES256"
   bucket_key_enabled   = true
 
@@ -51,6 +51,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
     }
   }
 
+  # No-op unless bucket_versioning is true.
   rule {
     id     = "expire-noncurrent-versions"
     status = "Enabled"

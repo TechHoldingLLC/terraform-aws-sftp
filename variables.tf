@@ -38,15 +38,17 @@ variable "allowed_cidr_blocks" {
 #  Compute
 #-----------------------------------------------------------------------------
 
-variable "ami_id" {
-  description = "AMI to launch. Must be Amazon Linux 2023 arm64"
-  type        = string
-}
 
 variable "instance_type" {
-  description = "Instance type. Must be arm64 (Graviton)"
+  description = "EC2 instance type."
   type        = string
   default     = "t4g.medium"
+}
+
+variable "ami_id" {
+  description = "AMI to launch."
+  type        = string
+  default     = null
 }
 
 variable "cpu_credits" {
@@ -254,6 +256,12 @@ variable "bucket_force_destroy" {
   default     = false
 }
 
+variable "bucket_versioning" {
+  description = "Keep every object version. Set at bucket creation - S3 cannot return a versioned bucket to unversioned"
+  type        = bool
+  default     = false
+}
+
 variable "abort_incomplete_multipart_days" {
   description = "Days before incomplete multipart uploads are aborted. Interrupted SFTP uploads leave parts that are billed but invisible in the console"
   type        = number
@@ -261,7 +269,7 @@ variable "abort_incomplete_multipart_days" {
 }
 
 variable "noncurrent_version_expiration_days" {
-  description = "Days before non-current object versions are deleted"
+  description = "Days before non-current object versions are deleted. Only applies when bucket_versioning is true"
   type        = number
   default     = 30
 }
@@ -274,16 +282,4 @@ variable "log_retention_days" {
   description = "CloudWatch Logs retention for the SFTPGo log"
   type        = number
   default     = 30
-}
-
-variable "alarm_sns_topic_arns" {
-  description = "SNS topics notified by the alarms. Empty still creates them, they just page nobody"
-  type        = list(string)
-  default     = []
-}
-
-variable "disk_used_alarm_threshold" {
-  description = "Root volume used percent that triggers the disk alarm"
-  type        = number
-  default     = 80
 }

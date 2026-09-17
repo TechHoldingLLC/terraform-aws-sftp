@@ -42,7 +42,6 @@ module "sftp" {
 
   vpc_id    = module.vpc.id
   subnet_id = element(module.subnet_public.public_subnet_ids, 0)
-  ami_id    = data.aws_ssm_parameter.al2023_arm64.value
 
   allowed_cidr_blocks = ["203.0.113.0/24"]   # partner egress IPs
 
@@ -57,13 +56,6 @@ description: Globex nightly pull
 key_only: true
 public_keys:
   - ssh-ed25519 AAAAC3Nza... ops@globex.com
-```
-
-```hcl
-# the AMI - Amazon Linux 2023 arm64
-data "aws_ssm_parameter" "al2023_arm64" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64"
-}
 ```
 
 `terraform apply`. Runnable versions of the above are in
@@ -85,7 +77,7 @@ running endpoint with no convenient way to read a password or open the admin pan
 | Providers | `aws >= 6.56`, `tls >= 4.3`, `random >= 3.9`, `null >= 3.2` - declare all four in your root `required_providers` |
 | Subnet | **public** - route to an internet gateway. Partners must reach it, and the host pulls packages and reaches the AWS APIs without NAT |
 | SSM | whoever runs Terraform needs `ssm:SendCommand` and `ssm:GetCommandInvocation`, because user changes are pushed over SSM. In CI, add these to the OIDC role |
-| AMI | Amazon Linux 2023 **arm64** - the instance type must be Graviton to match |
+| AMI | resolved by the module - Amazon Linux 2023 **arm64**, to match Graviton. Override with `ami_id` |
 
 ---
 
@@ -102,14 +94,14 @@ running endpoint with no convenient way to read a password or open the admin pan
 
 ## Inputs
 
-Required: `name`, `vpc_id`, `subnet_id`, `ami_id`.
+Required: `name`, `vpc_id`, `subnet_id`.
 
 | Name | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | **required** | Name prefix for every resource, e.g. `"sftp-dev"` |
 | `vpc_id` | string | **required** | Existing VPC to attach the host to |
 | `subnet_id` | string | **required** | Existing **public** subnet |
-| `ami_id` | string | **required** | AMI to launch. Must be Amazon Linux 2023 **arm64** |
+| `ami_id` | string | `null` | Pin an AMI. Null resolves the latest AL2023 **arm64** (kernel 6.18) |
 | `users` | object list | `[]` | Per-user config - see the users README |
 | `allowed_cidr_blocks` | list(string) | `["0.0.0.0/0"]` | Who may reach the SFTP port. **Narrow this** |
 | `tags` | map(string) | `{}` | Extra tags, merged with provider `default_tags` |
@@ -132,10 +124,9 @@ Required: `name`, `vpc_id`, `subnet_id`, `ami_id`.
 | `admin_permissions` | list(string) | `["*"]` | Narrow to `view_*` for an inspection-only panel |
 | `bucket_force_destroy` | bool | `false` | Allow deleting a non-empty bucket. Keep false with real data |
 | `abort_incomplete_multipart_days` | number | `7` | Aborts orphaned upload parts - billed but invisible in the console |
-| `noncurrent_version_expiration_days` | number | `30` | Deletes old object versions |
+| `bucket_versioning` | bool | `false` | Keep every object version. Off by default - partners re-send the same filename and each version is billed |
+| `noncurrent_version_expiration_days` | number | `30` | Deletes old object versions. Only applies when `bucket_versioning` is true |
 | `log_retention_days` | number | `30` | CloudWatch Logs retention |
-| `alarm_sns_topic_arns` | list(string) | `[]` | Empty still creates the alarms, they just page nobody |
-| `disk_used_alarm_threshold` | number | `80` | Root volume used percent that alarms |
 
 ## Outputs
 
@@ -176,8 +167,11 @@ Required: `name`, `vpc_id`, `subnet_id`, `ami_id`.
     └───────────┘        └────────────────┘
 ```
 
-Plus: security group, IAM role, CloudWatch log group, four alarms, and the SSM document
-that pushes user changes.
+Plus: security group, IAM role, CloudWatch log group, and the SSM document that pushes
+user changes.
+
+**No alarms.** The log group is the whole of it - `make sftp-logs` shows every auth
+attempt with its source IP.
 
 ---
 
@@ -396,8 +390,8 @@ consume resources.
 Two burstable caveats:
 
 - `cpu_credits` defaults to `unlimited`, which bills surplus credits rather than
-  throttling. The `cpu-surplus-credits-charged` alarm makes that spend visible; if it
-  fires steadily, move to `c7g.large` (~$53/mo, 12.5 Gbps, no credit model).
+  throttling. Watch `CPUSurplusCreditsCharged` on the instance; if you are paying it
+  steadily, move to `c7g.large` (~$53/mo, 12.5 Gbps, no credit model).
 - T-family **network** bandwidth is also burstable. Sustained multi-Gbps needs a
   non-burstable family regardless of CPU credits.
 

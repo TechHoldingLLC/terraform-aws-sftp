@@ -37,10 +37,6 @@ data "aws_subnets" "public" {
   }
 }
 
-data "aws_ssm_parameter" "al2023_arm64" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64"
-}
-
 module "sftp" {
   source = "../../"
 
@@ -48,7 +44,6 @@ module "sftp" {
 
   vpc_id    = data.aws_vpc.default.id
   subnet_id = sort(data.aws_subnets.public.ids)[0]
-  ami_id    = data.aws_ssm_parameter.al2023_arm64.value
 
   allowed_cidr_blocks = ["203.0.113.0/24"] # replace with real partner IPs
 

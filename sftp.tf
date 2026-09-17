@@ -3,7 +3,7 @@
 ##################
 
 resource "aws_instance" "this" {
-  ami           = var.ami_id
+  ami           = local.ami_id
   instance_type = var.instance_type
   subnet_id     = var.subnet_id
 
@@ -140,6 +140,12 @@ resource "aws_instance" "this" {
     aws_iam_role_policy.instance,
     aws_iam_role_policy_attachment.ssm,
   ]
+
+  lifecycle {
+    # Here we have kept ami id as default and it automatically updates to new AMI ID
+    # We don't want to replace server automatically when new AMI Launches.
+    ignore_changes = [ami]
+  }
 }
 
 resource "aws_eip" "this" {

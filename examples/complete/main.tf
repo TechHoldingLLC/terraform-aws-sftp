@@ -36,7 +36,7 @@ provider "aws" {
 }
 
 #----------------------------------------------------------------------------
-#  Networking and AMI - inputs to the module, never created by it
+#  Networking - an input to the module, never created by it
 #----------------------------------------------------------------------------
 
 data "aws_vpc" "default" {
@@ -53,12 +53,6 @@ data "aws_subnets" "public" {
     name   = "map-public-ip-on-launch"
     values = ["true"]
   }
-}
-
-# Amazon Linux 2023 arm64, from the AWS-published parameter. Authoritative, so it
-# cannot match an unexpected community image the way a name filter can.
-data "aws_ssm_parameter" "al2023_arm64" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64"
 }
 
 #----------------------------------------------------------------------------
@@ -83,7 +77,6 @@ module "sftp" {
 
   vpc_id    = data.aws_vpc.default.id
   subnet_id = sort(data.aws_subnets.public.ids)[0]
-  ami_id    = data.aws_ssm_parameter.al2023_arm64.value
 
   # Narrow this to real partner egress IPs. The default is the whole internet.
   allowed_cidr_blocks = var.allowed_cidr_blocks

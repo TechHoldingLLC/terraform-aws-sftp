@@ -15,18 +15,14 @@ module "sftp" {
   name      = "myproject-dev"
   vpc_id    = module.vpc.id
   subnet_id = element(module.vpc.public_subnet_ids, 0)   # must be public
-  ami_id    = data.aws_ssm_parameter.al2023_arm64.value
 
   users = [
     { username = "partner-a" }   # password generated, full read/write in partner-a/
   ]
 }
-
-# Amazon Linux 2023 arm64 - authoritative, unlike an aws_ami name filter
-data "aws_ssm_parameter" "al2023_arm64" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64"
-}
 ```
+
+The module resolves the AMI - the latest Amazon Linux 2023 arm64. Pass `ami_id` to pin one.
 
 `allowed_cidr_blocks` defaults to `0.0.0.0/0`. Narrow it - see below.
 
@@ -48,7 +44,6 @@ module "sftp" {
   name      = var.prefix
   vpc_id    = module.vpc.id
   subnet_id = element(module.vpc.public_subnet_ids, 0)
-  ami_id    = data.aws_ssm_parameter.al2023_arm64.value
 
   users = module.sftp_users.users
 }
@@ -78,7 +73,6 @@ module "sftp" {
   name      = var.prefix
   vpc_id    = module.vpc.id
   subnet_id = element(module.vpc.public_subnet_ids, 0)
-  ami_id    = data.aws_ssm_parameter.al2023_arm64.value
 
   users = [
     { username = "partner-a", enable_password = true },
@@ -212,19 +206,21 @@ module "sftp" {
 }
 ```
 
-## Alarms wired to a topic
+## Versioning and log retention
 
-The four alarms are always created. Without a topic they show state in the console but
-page nobody.
+Versioning is off by default - partners re-send the same filename and every version is
+billed. Turn it on where the data is worth that.
 
 ```hcl
 module "sftp" {
   # ...
-  alarm_sns_topic_arns      = [aws_sns_topic.ops.arn]
-  disk_used_alarm_threshold = 70
-  log_retention_days        = 90
+  bucket_versioning                  = true
+  noncurrent_version_expiration_days = 14
+  log_retention_days                 = 90
 }
 ```
+
+The module creates no alarms - just the log group.
 
 ## Inspection-only admin panel
 
