@@ -4,7 +4,7 @@
 
 output "endpoint" {
   description = "Host partners connect to"
-  value       = aws_eip.this.public_ip
+  value       = aws_eip.sftp_eip.public_ip
 }
 
 output "port" {
@@ -27,14 +27,6 @@ output "admin_secret_arn" {
   value       = aws_secretsmanager_secret.admin.arn
 }
 
-output "host_public_keys" {
-  description = "SSH host public keys. Give these to partners out-of-band so their first connection is verified, not blindly trusted"
-  value = {
-    ed25519 = trimspace(tls_private_key.host_ed25519.public_key_openssh)
-    rsa     = trimspace(tls_private_key.host_rsa.public_key_openssh)
-  }
-}
-
 output "bucket_name" {
   description = "Bucket backing the SFTP tree"
   value       = module.s3.bucket_name
@@ -42,12 +34,7 @@ output "bucket_name" {
 
 output "instance_id" {
   description = "Instance ID, for opening an SSM session"
-  value       = aws_instance.this.id
-}
-
-output "security_group_id" {
-  description = "Security group of the SFTP host, to reference from other security groups"
-  value       = module.security_group.id
+  value       = aws_instance.sftp_ec2.id
 }
 
 output "log_group_name" {

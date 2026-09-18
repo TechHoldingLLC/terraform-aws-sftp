@@ -6,21 +6,16 @@ module "s3" {
   source = "git::https://github.com/TechHoldingLLC/terraform-aws-s3-bucket.git?ref=v1.0.7"
 
   name          = "${var.name}-sftp"
-  force_destroy = var.bucket_force_destroy
+  force_destroy = false
 
-  versioning           = "Enabled"
-  encryption_algorithm = "AES256"
-  bucket_key_enabled   = true
-
-  # Deny requests where aws:SecureTransport is false.
-  block_http_request = true
-
-  # Lifecycle is declared below - the module has no `transition` block and its
-  # lifecycle_rule is type = any, so unknown keys are dropped silently.
+  versioning            = var.bucket_versioning ? "Enabled" : "Disabled"
+  encryption_algorithm  = "AES256"
+  bucket_key_enabled    = true
+  block_http_request    = true
   create_lifecycle_rule = false
 }
 
-resource "aws_s3_bucket_public_access_block" "this" {
+resource "aws_s3_bucket_public_access_block" "sftp_bucket" {
   bucket = module.s3.bucket_name
 
   block_public_acls       = true
@@ -29,7 +24,7 @@ resource "aws_s3_bucket_public_access_block" "this" {
   restrict_public_buckets = true
 }
 
-resource "aws_s3_bucket_ownership_controls" "this" {
+resource "aws_s3_bucket_ownership_controls" "sftp_bucket" {
   bucket = module.s3.bucket_name
 
   rule {
@@ -37,7 +32,7 @@ resource "aws_s3_bucket_ownership_controls" "this" {
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "this" {
+resource "aws_s3_bucket_lifecycle_configuration" "sftp_bucket" {
   bucket = module.s3.bucket_name
 
   rule {
@@ -51,6 +46,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
     }
   }
 
+  # No-op unless bucket_versioning is true.
   rule {
     id     = "expire-noncurrent-versions"
     status = "Enabled"
