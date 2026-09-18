@@ -13,7 +13,6 @@ variable "tags" {
   default     = {}
 }
 
-
 #-----------------------------------------------------------------------------
 #  Network - supplied by the caller, never created here
 #-----------------------------------------------------------------------------
@@ -31,13 +30,13 @@ variable "subnet_id" {
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to reach the SFTP port. Narrow to partner IPs once known"
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  # Used by Security group
+  default = ["0.0.0.0/0"]
 }
 
 #-----------------------------------------------------------------------------
 #  Compute
 #-----------------------------------------------------------------------------
-
 
 variable "instance_type" {
   description = "EC2 instance type."
@@ -48,30 +47,14 @@ variable "instance_type" {
 variable "ami_id" {
   description = "AMI to launch."
   type        = string
-  default     = null
-}
-
-variable "cpu_credits" {
-  description = "Burstable CPU credits: \"unlimited\" avoids throttling mid-transfer but bills surplus credits, \"standard\" throttles instead. Ignored on non-burstable families"
-  type        = string
-  default     = "unlimited"
-
-  validation {
-    condition     = contains(["unlimited", "standard"], var.cpu_credits)
-    error_message = "cpu_credits must be \"unlimited\" or \"standard\"."
-  }
+  # Passed via SSM Parameter by default
+  default = null
 }
 
 variable "root_volume_size" {
   description = "Root volume GB. SFTPGo stages in-flight and resumed transfers on local disk even with an S3 backend, so this must exceed largest file x concurrent transfers"
   type        = number
   default     = 20
-}
-
-variable "ebs_kms_key_id" {
-  description = "KMS key for root volume encryption. Null uses the AWS-managed EBS key"
-  type        = string
-  default     = null
 }
 
 #-----------------------------------------------------------------------------
@@ -84,34 +67,10 @@ variable "sftpgo_version" {
   default     = "2.7.5"
 }
 
-variable "sftpgo_rpm_sha256" {
-  description = "Expected SHA-256 of the SFTPGo aarch64 RPM. Bootstrap fails closed on mismatch. Update together with sftpgo_version: curl -sSL https://github.com/drakkan/sftpgo/releases/download/v<VER>/sftpgo-<VER>-1.aarch64.rpm | sha256sum"
-  type        = string
-  default     = "01e6e0e2dca73f931eb57c30a9793781c40791e8492127c2fd88666bf8ea947d"
-}
-
 variable "sftp_port" {
-  description = "Port SFTPGo listens on. The service gets CAP_NET_BIND_SERVICE so 22 works without root"
+  description = "Port SFTPGo listens on."
   type        = number
   default     = 22
-}
-
-variable "max_auth_tries" {
-  description = "Failed auth attempts per connection before SFTPGo drops it"
-  type        = number
-  default     = 3
-}
-
-variable "defender_ban_time" {
-  description = "Minutes a host stays banned by the brute-force defender"
-  type        = number
-  default     = 30
-}
-
-variable "defender_threshold" {
-  description = "Defender score at which a host is banned. Each failed login scores 2"
-  type        = number
-  default     = 10
 }
 
 variable "upload_part_size" {
@@ -157,18 +116,23 @@ variable "users" {
     SFTP users. Rendered to an SFTPGo backup document, stored in Secrets Manager and
     imported at boot, so the instance is disposable.
 
+    Auth mode follows from what you set - there is no mode to pick:
+      public_keys only                 key-only
+      enable_password only             password-only
+      enable_password + public_keys    either one works
+
       username           Login name, and the default S3 key prefix
-      key_prefix         S3 prefix the user is confined to. Defaults to "<username>/", must end in "/"
+      key_prefix         S3 prefix the user is confined to, must end in "/". Unset gives
+                         "<username>/"; "" gives the whole bucket
       public_keys        Authorized SSH public keys in authorized_keys format
       enable_password    Generate a password and allow password auth
-      password_only      Deny public-key auth
-      key_only           Deny password auth, overrides enable_password
       permissions        SFTPGo permissions at "/"
       quota_size         Max stored bytes, 0 for unlimited
       max_sessions       Max concurrent sessions, 0 for unlimited
       upload_bandwidth   Upload throttle KB/s, 0 for unlimited
       download_bandwidth Download throttle KB/s, 0 for unlimited
-      allowed_ip         Per-user source CIDR allowlist, empty for any
+      allowed_ip         Source CIDRs THIS user may log in from, empty for any. Narrower
+                         than allowed_cidr_blocks, which gates the port for everyone
       expiration_date    Account expiry, unix milliseconds, 0 for never
       description        Note shown in the SFTPGo admin UI
   EOT
@@ -177,9 +141,7 @@ variable "users" {
     username           = string
     key_prefix         = optional(string)
     public_keys        = optional(list(string), [])
-    enable_password    = optional(bool, true)
-    password_only      = optional(bool, false)
-    key_only           = optional(bool, false)
+    enable_password    = optional(bool, false)
     permissions        = optional(list(string), ["list", "download", "upload", "overwrite", "delete", "rename", "create_dirs"])
     quota_size         = optional(number, 0)
     max_sessions       = optional(number, 0)
@@ -203,23 +165,13 @@ variable "users" {
   }
 
   validation {
-    condition     = alltrue([for u in var.users : u.key_prefix == null || endswith(coalesce(u.key_prefix, "/"), "/")])
-    error_message = "key_prefix must end with \"/\"."
-  }
-
-  validation {
-    condition     = alltrue([for u in var.users : !(u.key_only && u.password_only)])
-    error_message = "A user cannot be both key_only and password_only."
-  }
-
-  validation {
-    condition     = alltrue([for u in var.users : u.key_only ? length(u.public_keys) > 0 : true])
-    error_message = "A key_only user needs at least one public key."
+    condition     = alltrue([for u in var.users : u.key_prefix == null || u.key_prefix == "" || endswith(u.key_prefix, "/")])
+    error_message = "key_prefix must end with \"/\", or be \"\" for the whole bucket."
   }
 
   validation {
     condition     = alltrue([for u in var.users : u.enable_password || length(u.public_keys) > 0])
-    error_message = "Each user needs enable_password = true or at least one public key."
+    error_message = "Each user needs enable_password = true, at least one public key, or both - otherwise they cannot log in."
   }
 }
 
@@ -239,22 +191,10 @@ variable "admin_username" {
   default     = "sftpadmin"
 }
 
-variable "admin_permissions" {
-  description = "Admin permissions. \"*\" is super admin; narrow to a read-only set like [\"view_users\",\"view_conns\",\"view_status\",\"view_defender\",\"view_events\"] if the panel is only for inspection"
-  type        = list(string)
-  default     = ["*"]
-}
-
 
 #-----------------------------------------------------------------------------
 #  Storage
 #-----------------------------------------------------------------------------
-
-variable "bucket_force_destroy" {
-  description = "Allow Terraform to delete a non-empty bucket. Keep false where partner data lives"
-  type        = bool
-  default     = false
-}
 
 variable "bucket_versioning" {
   description = "Keep every object version. Set at bucket creation - S3 cannot return a versioned bucket to unversioned"
@@ -271,13 +211,12 @@ variable "abort_incomplete_multipart_days" {
 variable "noncurrent_version_expiration_days" {
   description = "Days before non-current object versions are deleted. Only applies when bucket_versioning is true"
   type        = number
-  default     = 30
+  default     = 14
 }
 
 #-----------------------------------------------------------------------------
 #  Observability
 #-----------------------------------------------------------------------------
-
 variable "log_retention_days" {
   description = "CloudWatch Logs retention for the SFTPGo log"
   type        = number

@@ -33,7 +33,9 @@ resource "aws_ssm_document" "sync_users" {
         action = "aws:runShellScript"
         name   = "syncUsers"
         inputs = {
-          timeoutSeconds = "120"
+          # Must exceed the script's own 300s wait for the bootstrap to finish,
+          # or SSM kills the command mid-wait on a freshly rebuilt host.
+          timeoutSeconds = "420"
           runCommand = [
             "#!/bin/bash",
             "set -Eeuo pipefail",
@@ -84,7 +86,7 @@ resource "aws_ssm_document" "sync_users" {
             "done",
             "",
             "# mode=0: add new, update existing. Never deletes - removing a user from",
-            "# Terraform does not revoke them. See modules/users-from-yaml/README.md.",
+            "# Terraform does not revoke them. See the users table in README.md.",
             "if [[ -n \"$TOKEN\" ]]; then",
             "  # Preferred path: apply live over the API. No restart, so in-flight",
             "  # transfers are not interrupted.",
@@ -133,6 +135,24 @@ resource "aws_ssm_document" "sync_users" {
             "  exit 0",
             "fi",
             "",
+            "# loaddata only adds and updates - it never deletes - so a user removed from",
+            "# Terraform would keep working. Prune anything no longer declared, which is what",
+            "# makes Terraform authoritative for who exists.",
+            "DECLARED=$(jq -r '.users[].username' \"$DOC\")",
+            "if [[ -n \"$DECLARED\" ]]; then",
+            "  ONSERVER=$(curl -sS --max-time 15 -H \"Authorization: Bearer $TOKEN\" \"$API/users\" | jq -r '.[].username')",
+            "  for U in $ONSERVER; do",
+            "    if ! grep -qxF \"$U\" <<<\"$DECLARED\"; then",
+            "      echo \"revoking $U (no longer declared in Terraform)\"",
+            "      curl -sS --max-time 15 -X DELETE -H \"Authorization: Bearer $TOKEN\" \"$API/users/$U\" >/dev/null || echo \"  WARNING: could not delete $U\"",
+            "    fi",
+            "  done",
+            "else",
+            "  # An empty document means something upstream went wrong. Pruning here would",
+            "  # delete every account, so do nothing and let the operator look.",
+            "  echo 'WARNING: document declares no users, skipping prune'",
+            "fi",
+            "",
             "echo '--- users now on the server ---'",
             "curl -sS --max-time 15 -H \"Authorization: Bearer $TOKEN\" \"$API/users\" \\",
             "  | jq -r '.[] | \"  \\(.username)  prefix=\\(.filesystem.s3config.key_prefix // \"-\")  status=\\(.status)\"'",
@@ -155,7 +175,7 @@ resource "null_resource" "sync_users" {
     # version_id changes only when the secret content changes.
     users_secret_version = aws_secretsmanager_secret_version.users.version_id
     document             = aws_ssm_document.sync_users.name
-    instance             = aws_instance.this.id
+    instance             = aws_instance.sftp_ec2.id
   }
 
   provisioner "local-exec" {
@@ -163,14 +183,14 @@ resource "null_resource" "sync_users" {
     command     = <<-EOT
       set -Eeuo pipefail
       "${path.module}/scripts/sftpctl" sync \
-        --instance "${aws_instance.this.id}" \
+        --instance "${aws_instance.sftp_ec2.id}" \
         --document "${aws_ssm_document.sync_users.name}" \
         --region "${data.aws_region.current.region}"
     EOT
   }
 
   depends_on = [
-    aws_instance.this,
+    aws_instance.sftp_ec2,
     aws_secretsmanager_secret_version.users,
     aws_secretsmanager_secret_version.admin,
     aws_iam_role_policy.instance,

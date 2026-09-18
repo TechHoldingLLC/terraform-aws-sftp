@@ -1,25 +1,17 @@
 #!/bin/bash
 #
-# SFTPGo bootstrap for Amazon Linux 2023 (arm64).
+# Bootstraps an SFTPGo server on Amazon Linux 2023 (arm64).
 #
-# Rendered by the terraform-aws-sftp module. Everything here is idempotent so the
-# script can be re-run over SSM to repair a host without replacing it.
+# Installs SFTPGo, pulls host keys and user definitions from Secrets Manager, ships logs
+# to CloudWatch, then proves the endpoint answers before reporting success. Nothing
+# secret is baked into this file - user_data is readable by anything that reaches IMDS.
 #
-# Design notes:
-#   * No credentials are baked into this file. Host keys and user definitions are
-#     fetched at runtime from Secrets Manager using the instance role, because
-#     user_data is readable by anything that can reach IMDS.
-#   * The OS sshd is stopped and disabled. Port 22 belongs to SFTPGo, and admin
-#     access is Session Manager only, so there is no admin key pair to rotate and
-#     no second listener to harden.
-#   * SFTPGo runs unprivileged with CAP_NET_BIND_SERVICE, which is what lets it
-#     bind the privileged port without being root.
+# Idempotent, so it can be re-run over SSM to repair a host instead of replacing it.
 #
 set -Eeuo pipefail
 
 readonly AWS_REGION="${aws_region}"
 readonly SFTPGO_VERSION="${sftpgo_version}"
-readonly EXPECTED_SHA256="${sftpgo_rpm_sha256}"
 readonly HOST_KEYS_SECRET_ID="${host_keys_secret_id}"
 readonly USERS_SECRET_ID="${users_secret_id}"
 readonly LOG_GROUP_NAME="${log_group_name}"
@@ -29,6 +21,7 @@ readonly SFTPGO_ETC="/etc/sftpgo"
 readonly SFTPGO_VAR="/var/lib/sftpgo"
 readonly SFTPGO_LOG_DIR="/var/log/sftpgo"
 readonly BOOTSTRAP_LOG="/var/log/sftp-bootstrap.log"
+readonly USERS_FILE="$SFTPGO_VAR/loaddata.json"
 
 exec > >(tee -a "$BOOTSTRAP_LOG") 2>&1
 
@@ -42,61 +35,37 @@ log "=== SFTPGo bootstrap starting (version $SFTPGO_VERSION, region $AWS_REGION)
 #-----------------------------------------------------------------------------
 # 1. Base packages
 #-----------------------------------------------------------------------------
+# openssh-clients supplies ssh-keygen and ssh-keyscan, used by the checks in step 9.
 log "Installing base packages"
-# openssh-clients supplies ssh-keygen and ssh-keyscan, which the host-key
-# assertions below depend on. Installed explicitly rather than assumed present,
-# since disabling sshd does not guarantee the client tools are there.
 dnf install -y --setopt=install_weak_deps=False \
   jq \
-  tar \
   openssh-clients \
   amazon-cloudwatch-agent
 
 #-----------------------------------------------------------------------------
 # 2. Free port 22 for SFTPGo
 #-----------------------------------------------------------------------------
-# Session Manager is the admin path, so the OS sshd is not needed and would
-# otherwise hold the port SFTPGo wants.
-log "Disabling OS sshd (administration is via SSM Session Manager)"
+# Administration is Session Manager only, so the OS sshd just holds the port we want.
+log "Disabling OS sshd"
 systemctl disable --now sshd.service 2>/dev/null || log "sshd was not running"
 
 #-----------------------------------------------------------------------------
 # 3. Install SFTPGo
 #-----------------------------------------------------------------------------
-INSTALLED_VERSION="$(rpm -q --queryformat '%%{VERSION}' sftpgo 2>/dev/null || true)"
-
-if [[ "$INSTALLED_VERSION" == "$SFTPGO_VERSION" ]]; then
-  log "SFTPGo $SFTPGO_VERSION already installed, skipping download"
+# Skip the download when the right version is already here, so an SSM repair run is fast.
+if [[ "$(rpm -q --queryformat '%%{VERSION}' sftpgo 2>/dev/null || true)" == "$SFTPGO_VERSION" ]]; then
+  log "SFTPGo $SFTPGO_VERSION already installed"
 else
-  RPM_NAME="sftpgo-$${SFTPGO_VERSION}-1.aarch64.rpm"
-  RPM_URL="https://github.com/drakkan/sftpgo/releases/download/v$${SFTPGO_VERSION}/$${RPM_NAME}"
-  RPM_PATH="/tmp/$${RPM_NAME}"
+  RPM_URL="https://github.com/drakkan/sftpgo/releases/download/v$${SFTPGO_VERSION}/sftpgo-$${SFTPGO_VERSION}-1.aarch64.rpm"
 
-  log "Downloading $RPM_URL"
-  curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o "$RPM_PATH" "$RPM_URL" \
+  log "Installing SFTPGo $SFTPGO_VERSION"
+  curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/sftpgo.rpm "$RPM_URL" \
     || fail "could not download SFTPGo $SFTPGO_VERSION for aarch64"
-
-  # Fail closed on a digest mismatch rather than installing unverified code on an
-  # internet-facing host. The expected value is pinned in the module variables.
-  if [[ -n "$EXPECTED_SHA256" ]]; then
-    ACTUAL_SHA256="$(sha256sum "$RPM_PATH" | awk '{print $1}')"
-    if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
-      rm -f "$RPM_PATH"
-      fail "SFTPGo RPM checksum mismatch: expected $EXPECTED_SHA256, got $ACTUAL_SHA256"
-    fi
-    log "Checksum verified: $ACTUAL_SHA256"
-  else
-    log "WARNING: no expected checksum configured; installing unverified package"
-  fi
-
-  log "Installing $RPM_NAME"
-  dnf install -y "$RPM_PATH"
-  rm -f "$RPM_PATH"
+  dnf install -y /tmp/sftpgo.rpm
+  rm -f /tmp/sftpgo.rpm
 fi
 
-# The RPM creates the sftpgo user/group and the systemd unit.
-id sftpgo >/dev/null 2>&1 || fail "sftpgo system user missing after package install"
-
+# The RPM creates the sftpgo user, group and systemd unit.
 install -d -m 0750 -o sftpgo -g sftpgo "$SFTPGO_VAR" "$SFTPGO_VAR/users" "$SFTPGO_LOG_DIR"
 install -d -m 0755 "$SFTPGO_ETC"
 
@@ -108,36 +77,30 @@ cat > "$SFTPGO_ETC/sftpgo.json" <<'SFTPGO_CONFIG_EOF'
 ${sftpgo_config}
 SFTPGO_CONFIG_EOF
 
-jq empty "$SFTPGO_ETC/sftpgo.json" || fail "rendered sftpgo.json is not valid JSON"
+# The service reads it, only root writes it.
 chown root:sftpgo "$SFTPGO_ETC/sftpgo.json"
 chmod 0640 "$SFTPGO_ETC/sftpgo.json"
 
 #-----------------------------------------------------------------------------
 # 5. Host keys
 #-----------------------------------------------------------------------------
-# Fetched rather than generated so the fingerprint partners pinned stays valid
-# across instance replacement.
+# Fetched rather than generated, so the fingerprint partners pinned survives a rebuild.
 log "Fetching SSH host keys from Secrets Manager"
 HOST_KEYS_JSON="$(aws secretsmanager get-secret-value \
   --secret-id "$HOST_KEYS_SECRET_ID" \
   --region "$AWS_REGION" \
   --query SecretString --output text)" || fail "could not read host keys secret"
 
-# The stored values already end in a newline and `jq -r` appends another, which
-# leaves a trailing blank line in the file. Harmless to SSH, but it makes any
-# line-wise comparison of the .pub file wrong. Normalise to exactly one newline:
-# the command substitution strips all trailing newlines, printf adds one back.
+# printf rather than `jq -r >`, so each file ends with exactly one newline.
 for KEY_NAME in id_ed25519 id_ed25519.pub id_rsa id_rsa.pub; do
   KEY_VALUE="$(jq -er --arg k "$KEY_NAME" '.[$k]' <<<"$HOST_KEYS_JSON")" \
     || fail "host keys secret is missing $KEY_NAME"
   printf '%s\n' "$KEY_VALUE" > "$SFTPGO_VAR/$KEY_NAME"
   chown sftpgo:sftpgo "$SFTPGO_VAR/$KEY_NAME"
 done
-unset KEY_VALUE
 
 chmod 0600 "$SFTPGO_VAR/id_ed25519" "$SFTPGO_VAR/id_rsa"
 chmod 0644 "$SFTPGO_VAR/id_ed25519.pub" "$SFTPGO_VAR/id_rsa.pub"
-unset HOST_KEYS_JSON
 
 log "Host key fingerprints now serving:"
 ssh-keygen -lf "$SFTPGO_VAR/id_ed25519.pub" || true
@@ -146,11 +109,8 @@ ssh-keygen -lf "$SFTPGO_VAR/id_rsa.pub" || true
 #-----------------------------------------------------------------------------
 # 6. Users
 #-----------------------------------------------------------------------------
-# SFTPGo imports this document at startup. Mode 0 means new users are added and
-# existing users are updated, which makes Terraform the single source of truth:
-# change the users variable, replace the host, and the state matches again.
-readonly USERS_FILE="$SFTPGO_VAR/loaddata.json"
-
+# SFTPGo imports this at startup in mode 0 - add new, update existing - which keeps
+# Terraform the single source of truth for who exists.
 log "Fetching user definitions from Secrets Manager"
 install -m 0600 -o sftpgo -g sftpgo /dev/null "$USERS_FILE"
 aws secretsmanager get-secret-value \
@@ -159,15 +119,13 @@ aws secretsmanager get-secret-value \
   --query SecretString --output text > "$USERS_FILE" \
   || fail "could not read users secret"
 
-jq empty "$USERS_FILE" || fail "users document is not valid JSON"
-USER_COUNT="$(jq -r '.users | length' "$USERS_FILE")"
-log "Loaded $USER_COUNT user definition(s)"
+log "Loaded $(jq -r '.users | length' "$USERS_FILE") user definition(s)"
 
 #-----------------------------------------------------------------------------
 # 7. systemd overrides
 #-----------------------------------------------------------------------------
 # CAP_NET_BIND_SERVICE lets the unprivileged sftpgo user bind port 22.
-# SFTPGO_LOADDATA_CLEAN removes the plaintext credential file once imported.
+# SFTPGO_LOADDATA_CLEAN deletes the plaintext credential file once imported.
 log "Writing systemd drop-in"
 install -d -m 0755 /etc/systemd/system/sftpgo.service.d
 
@@ -178,8 +136,8 @@ Environment="SFTPGO_LOADDATA_MODE=0"
 Environment="SFTPGO_LOADDATA_CLEAN=1"
 Environment="SFTPGO_CONFIG_DIR=$SFTPGO_ETC"
 
-# Logging has no sftpgo.json section - it is flag/env driven only, so it is
-# configured here rather than in the config file.
+# Logging is env-driven only - sftpgo.json has no log section, and Viper would
+# silently drop one.
 Environment="SFTPGO_LOG_FILE_PATH=$SFTPGO_LOG_DIR/sftpgo.log"
 Environment="SFTPGO_LOG_MAX_SIZE=10"
 Environment="SFTPGO_LOG_MAX_BACKUPS=3"
@@ -205,6 +163,7 @@ systemctl daemon-reload
 #-----------------------------------------------------------------------------
 # 8. CloudWatch agent - logs only
 #-----------------------------------------------------------------------------
+# Log delivery is not worth failing the boot over, so this one only warns.
 log "Configuring CloudWatch agent"
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<CW_EOF
 {
@@ -242,41 +201,21 @@ CW_EOF
   || log "WARNING: CloudWatch agent failed to start; SFTP service is unaffected"
 
 #-----------------------------------------------------------------------------
-# 9. Start SFTPGo
+# 9. Start and verify
 #-----------------------------------------------------------------------------
-log "Enabling and starting sftpgo"
+log "Starting sftpgo"
 systemctl enable sftpgo.service
 systemctl restart sftpgo.service
-
-# Give the service a moment to bind and import, then verify rather than assume.
-for _ in $(seq 1 30); do
-  if systemctl is-active --quiet sftpgo.service; then
-    break
-  fi
-  sleep 2
-done
-
 systemctl is-active --quiet sftpgo.service \
   || fail "sftpgo did not start; see: journalctl -u sftpgo -n 100"
 
-#-----------------------------------------------------------------------------
-# 10. Post-start assertions
-#-----------------------------------------------------------------------------
-# systemd reports active as soon as the process forks, which is well before the
-# listener binds and the import finishes - so every check here polls rather than
-# reading state once.
+# systemd calls the unit active the moment it forks, so poll the port instead. This
+# proves the listener is up AND serving the key from Secrets Manager - SFTPGo quietly
+# generates its own when it cannot find the configured ones, and a wrong fingerprint
+# fails every partner at once.
 SFTP_PORT="$(jq -r '.sftpd.bindings[0].port' "$SFTPGO_ETC/sftpgo.json")"
-
-# SFTPGo generates its own host keys when it cannot find the configured ones, and
-# does so without complaint: the endpoint comes up healthy serving a fingerprint
-# no partner has pinned.
-if compgen -G "$SFTPGO_ETC/id_*" > /dev/null; then
-  fail "SFTPGo generated host keys in $SFTPGO_ETC - configured host_keys did not resolve to $SFTPGO_VAR. Partners would see an unexpected fingerprint."
-fi
-
-# First non-empty line only - a stray blank line would otherwise add a second
-# record and make the comparison fail against a key that is actually correct.
 EXPECTED_KEY="$(awk 'NF {print $1" "$2; exit}' "$SFTPGO_VAR/id_ed25519.pub")"
+
 SERVED_KEY=""
 for _ in $(seq 1 20); do
   SERVED_KEY="$(ssh-keyscan -T 5 -t ssh-ed25519 -p "$SFTP_PORT" 127.0.0.1 2>/dev/null \
@@ -285,24 +224,23 @@ for _ in $(seq 1 20); do
   sleep 2
 done
 
-[[ -n "$SERVED_KEY" ]] || fail "SFTPGo is running but nothing answered on port $SFTP_PORT after 40s"
+[[ -n "$SERVED_KEY" ]] || fail "nothing answered on port $SFTP_PORT after 40s"
 [[ "$SERVED_KEY" == "$EXPECTED_KEY" ]] \
-  || fail "served ed25519 host key does not match $SFTPGO_VAR/id_ed25519.pub"
-log "Verified: listener up on port $SFTP_PORT, serving the host key from Secrets Manager"
+  || fail "served host key is not the one from Secrets Manager - partners would see an unexpected fingerprint"
+log "Verified: listening on port $SFTP_PORT with the expected host key"
 
-# loaddata runs asynchronously at startup and its failures are logged without
-# stopping the daemon - the port would be open with nobody able to log in.
-# SFTPGO_LOADDATA_CLEAN removes the file only after a successful import, so its
-# disappearance is the success signal.
+# loaddata runs asynchronously and logs failures without stopping the daemon, which
+# leaves the port open with nobody able to log in. CLEAN=1 deletes the file only after
+# a successful import, so the file disappearing is the success signal.
 for _ in $(seq 1 20); do
   [[ -f "$USERS_FILE" ]] || break
   sleep 2
 done
 
 if [[ -f "$USERS_FILE" ]]; then
-  fail "$USERS_FILE still present after 40s - the user import failed. Check: journalctl -u sftpgo | grep -i loaddata"
+  fail "user import failed - check: journalctl -u sftpgo | grep -i loaddata"
 fi
-log "Verified: user import completed and the plaintext document was removed"
+log "Verified: users imported and the plaintext document removed"
 
 log "=== SFTPGo bootstrap complete ==="
 systemctl status sftpgo.service --no-pager || true

@@ -15,9 +15,11 @@ resource "tls_private_key" "host_rsa" {
 }
 
 resource "aws_secretsmanager_secret" "host_keys" {
-  name                    = "${var.name}-sftp-host-keys"
-  description             = "SSH host keys for the ${var.name} SFTP endpoint"
-  recovery_window_in_days = 7
+  name        = "${var.name}-sftp-host-keys"
+  description = "SSH host keys for the ${var.name} SFTP endpoint"
+  # 0 deletes immediately on destroy. The default 7-day window keeps the name
+  # reserved, so a re-apply fails until it expires.
+  recovery_window_in_days = 0
 
   tags = var.tags
 }
@@ -34,7 +36,7 @@ resource "aws_secretsmanager_secret_version" "host_keys" {
 }
 
 resource "random_password" "user" {
-  for_each = { for u in var.users : u.username => u if u.enable_password && !u.key_only }
+  for_each = { for u in var.users : u.username => u if u.enable_password }
 
   length           = var.password_length
   override_special = "!#%*+-=?_~"
@@ -56,9 +58,11 @@ resource "random_password" "admin" {
 # The SFTPGo backup document. Passwords go in here and the whole thing goes to
 # Secrets Manager - never to user_data, which is readable via IMDS.
 resource "aws_secretsmanager_secret" "users" {
-  name                    = "${var.name}-sftp-users"
-  description             = "SFTPGo loaddata document for ${var.name}"
-  recovery_window_in_days = 7
+  name        = "${var.name}-sftp-users"
+  description = "SFTPGo loaddata document for ${var.name}"
+  # 0 deletes immediately on destroy. The default 7-day window keeps the name
+  # reserved, so a re-apply fails until it expires.
+  recovery_window_in_days = 0
 
   tags = var.tags
 }
@@ -80,7 +84,7 @@ resource "aws_secretsmanager_secret_version" "users" {
         username    = var.admin_username
         password    = random_password.admin.result
         status      = 1
-        permissions = var.admin_permissions
+        permissions = ["*"]
         description = "Managed by Terraform"
       }
     ]
@@ -111,10 +115,12 @@ resource "aws_secretsmanager_secret_version" "users" {
           allowed_ip = u.allowed_ip
           denied_ip  = []
 
+          # Auth mode is derived: a method is denied when the user has nothing
+          # configured for it. No password set -> password auth off, no keys -> key auth off.
           denied_login_methods = concat(
             ["publickey+password", "publickey+keyboard-interactive", "TLSCertificate", "TLSCertificate+password"],
-            (u.key_only || !u.enable_password) ? ["password", "password-over-SSH", "keyboard-interactive"] : [],
-            u.password_only ? ["publickey"] : [],
+            !u.enable_password ? ["password", "password-over-SSH", "keyboard-interactive"] : [],
+            length(u.public_keys) == 0 ? ["publickey"] : [],
           )
 
           denied_protocols = ["FTP", "DAV", "HTTP"]
@@ -125,9 +131,10 @@ resource "aws_secretsmanager_secret_version" "users" {
           provider = 1
 
           s3config = {
-            bucket     = module.s3.bucket_name
-            region     = data.aws_region.current.region
-            key_prefix = coalesce(u.key_prefix, "${u.username}/")
+            bucket = module.s3.bucket_name
+            region = data.aws_region.current.region
+            # Not coalesce: it skips "", which is how a user asks for the whole bucket.
+            key_prefix = u.key_prefix != null ? u.key_prefix : "${u.username}/"
 
             # No access_key/access_secret: SFTPGo falls back to the instance role.
             upload_part_size     = var.upload_part_size
@@ -144,9 +151,11 @@ resource "aws_secretsmanager_secret_version" "users" {
 # Flat username -> password map, so an operator can read one credential without
 # pulling the whole SFTPGo document. Read by `make sftp-password`.
 resource "aws_secretsmanager_secret" "user_passwords" {
-  name                    = "${var.name}-sftp-user-passwords"
-  description             = "Username to password map for ${var.name} SFTP users"
-  recovery_window_in_days = 7
+  name        = "${var.name}-sftp-user-passwords"
+  description = "Username to password map for ${var.name} SFTP users"
+  # 0 deletes immediately on destroy. The default 7-day window keeps the name
+  # reserved, so a re-apply fails until it expires.
+  recovery_window_in_days = 0
 
   tags = var.tags
 }
@@ -157,9 +166,11 @@ resource "aws_secretsmanager_secret_version" "user_passwords" {
 }
 
 resource "aws_secretsmanager_secret" "admin" {
-  name                    = "${var.name}-sftp-admin"
-  description             = "Web admin credentials for ${var.name} SFTPGo"
-  recovery_window_in_days = 7
+  name        = "${var.name}-sftp-admin"
+  description = "Web admin credentials for ${var.name} SFTPGo"
+  # 0 deletes immediately on destroy. The default 7-day window keeps the name
+  # reserved, so a re-apply fails until it expires.
+  recovery_window_in_days = 0
 
   tags = var.tags
 }

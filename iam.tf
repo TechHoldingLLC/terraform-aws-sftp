@@ -14,7 +14,7 @@ data "aws_iam_policy_document" "assume_role" {
   }
 }
 
-resource "aws_iam_role" "this" {
+resource "aws_iam_role" "sftp_role" {
   name               = "${var.name}-sftp"
   description        = "Instance role for the ${var.name} SFTP host"
   assume_role_policy = data.aws_iam_policy_document.assume_role.json
@@ -22,16 +22,16 @@ resource "aws_iam_role" "this" {
   tags = var.tags
 }
 
-resource "aws_iam_instance_profile" "this" {
+resource "aws_iam_instance_profile" "sftp_instance_profile" {
   name = "${var.name}-sftp"
-  role = aws_iam_role.this.name
+  role = aws_iam_role.sftp_role.name
 
   tags = var.tags
 }
 
 # Session Manager replaces SSH for admin access.
 resource "aws_iam_role_policy_attachment" "ssm" {
-  role       = aws_iam_role.this.name
+  role       = aws_iam_role.sftp_role.name
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
@@ -95,6 +95,6 @@ data "aws_iam_policy_document" "instance" {
 
 resource "aws_iam_role_policy" "instance" {
   name   = "${var.name}-sftp"
-  role   = aws_iam_role.this.id
+  role   = aws_iam_role.sftp_role.id
   policy = data.aws_iam_policy_document.instance.json
 }

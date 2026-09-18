@@ -1,272 +1,94 @@
 # terraform-aws-sftp
 
-Self-hosted SFTP endpoint backed by S3 - SFTPGo on a single Graviton EC2 instance
+An SFTP endpoint for exchanging files with partners, backed by S3.
 
-A drop-in replacement for AWS Transfer Family at roughly **$33/month instead of $219**,
-supporting **passwords and SSH keys per user**, which is the one thing Transfer Family
-makes awkward: its service-managed mode is key-only, and passwords need either AWS
-Managed AD or a custom Lambda identity provider you write and maintain.
+Partners connect with a normal SFTP client to a fixed IP. Everything they upload lands
+in an S3 bucket, each user locked to their own prefix.
 
-| | Transfer Family | This module |
-|---|---|---|
-| Fixed monthly cost | **$219** per protocol | **~$33** |
-| Data in | $0.04/GB | free |
-| Data out | $0.04/GB | $0.09/GB egress, first 100 GB free |
-| Passwords + keys together | AD or custom Lambda IdP | native |
-| Availability | AWS-managed | yours - single AZ |
+---
 
-**Owns the SFTP tier only.** Networking is an input, never created here you pass a
-`vpc_id` and `subnet_id` that already exist, so it drops into a project that has its own
-VPC.
+## Architecture
+
+![Architecture](docs/architecture.svg)
+
+Each user is confined to their own prefix in the bucket. Nothing is public, and there is
+no SSH access to the host.
 
 ---
 
 ## Quick start
 
-Four pieces: the module, the user loader, a directory of users, and - for day-to-day
-operations - the `sftpctl` script plus two Makefile targets.
+Two files. Fill in three values, apply.
+
+**1. `sftp.tf`**
 
 ```hcl
-# stack/sftp.tf
-
-module "sftp_users" {
-  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git//modules/users-from-yaml?ref=v0.0.1"
-
-  path = "${path.root}/users"
-}
-
 module "sftp" {
   source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v0.0.1"
 
-  name = var.prefix                     # e.g. "myproject-dev"
+  name = "<your-project>-<env>"             # prefix for every resource
 
-  vpc_id    = module.vpc.id
-  subnet_id = element(module.subnet_public.public_subnet_ids, 0)
+  vpc_id    = "<vpc-id>"                    # existing VPC
+  subnet_id = "<public-subnet-id>"          # existing PUBLIC subnet
 
-  allowed_cidr_blocks = ["203.0.113.0/24"]   # partner egress IPs
+  # One YAML file per user in ./users/. Adding a file onboards someone,
+  # deleting one offboards them.
+  users = [
+    for f in fileset("${path.root}/users", "*.{yaml,yml}") :
+    yamldecode(file("${path.root}/users/${f}"))
+  ]
+}
 
-  users = module.sftp_users.users
+output "sftp" {
+  value = module.sftp
 }
 ```
 
+**2. `users/<username>.yaml`**, one per user, filename matching the username
+(`.yml` works too)
+
 ```yaml
-# stack/users/globex.yaml   - filename must match the username
-username: globex
-description: Globex nightly pull
-key_only: true
-public_keys:
-  - ssh-ed25519 AAAAC3Nza... ops@globex.com
+username: <username>
+description: <what this account is for>
+enable_password: true
 ```
 
-`terraform apply`. Runnable versions of the above are in
-[`examples/complete/`](examples/complete) and
-[`examples/inline-users/`](examples/inline-users).
-
-Pin **both** modules to the same `ref` - they ship from one tag, which is what keeps the
-loader's validation in step with the module's schema.
-
-**Then set up the operator commands** - three short steps, and without them you have a
-running endpoint with no convenient way to read a password or open the admin panel:
-[Operator commands → Setting it up](#setting-it-up-in-your-project).
-
-### Requirements
-
-| | |
-|---|---|
-| Terraform | **≥ 1.14** - `terraform_data` preconditions in the loader |
-| Providers | `aws >= 6.56`, `tls >= 4.3`, `random >= 3.9`, `null >= 3.2` - declare all four in your root `required_providers` |
-| Subnet | **public** - route to an internet gateway. Partners must reach it, and the host pulls packages and reaches the AWS APIs without NAT |
-| SSM | whoever runs Terraform needs `ssm:SendCommand` and `ssm:GetCommandInvocation`, because user changes are pushed over SSM. In CI, add these to the OIDC role |
-| AMI | resolved by the module - Amazon Linux 2023 **arm64**, to match Graviton. Override with `ami_id` |
-
----
-
-## Documentation
-
-| Read | For |
-|---|---|
-| this file | inputs, outputs, architecture, design decisions |
-| [`EXAMPLE.md`](EXAMPLE.md) | **calling the module** - a worked example per scenario |
-| [`modules/users-from-yaml/README.md`](modules/users-from-yaml/README.md) | **the user schema** - every field, worked examples, onboarding, offboarding, troubleshooting |
-| [`examples/complete/`](examples/complete) | a runnable deployment |
-
----
-
-## Inputs
-
-Required: `name`, `vpc_id`, `subnet_id`.
-
-| Name | Type | Default | Description |
-|---|---|---|---|
-| `name` | string | **required** | Name prefix for every resource, e.g. `"sftp-dev"` |
-| `vpc_id` | string | **required** | Existing VPC to attach the host to |
-| `subnet_id` | string | **required** | Existing **public** subnet |
-| `ami_id` | string | `null` | Pin an AMI. Null resolves the latest AL2023 **arm64** (kernel 6.18) |
-| `users` | object list | `[]` | Per-user config - see the users README |
-| `allowed_cidr_blocks` | list(string) | `["0.0.0.0/0"]` | Who may reach the SFTP port. **Narrow this** |
-| `tags` | map(string) | `{}` | Extra tags, merged with provider `default_tags` |
-| `instance_type` | string | `"t4g.medium"` | Must be arm64 (Graviton) |
-| `cpu_credits` | string | `"unlimited"` | `unlimited` avoids throttling but bills surplus; `standard` throttles |
-| `root_volume_size` | number | `20` | GB. Transfers stage on local disk even with an S3 backend |
-| `ebs_kms_key_id` | string | `null` | Null uses the AWS-managed EBS key |
-| `sftp_port` | number | `22` | Service gets `CAP_NET_BIND_SERVICE`, so 22 works unprivileged |
-| `sftpgo_version` | string | `"2.7.5"` | Release to install, no leading `v` |
-| `sftpgo_rpm_sha256` | string | pinned | Expected RPM digest; the bootstrap fails closed on mismatch |
-| `max_auth_tries` | number | `3` | Failed auths per connection before disconnect |
-| `defender_threshold` | number | `10` | Ban score. Each failed login scores 2, so ~5 tries |
-| `defender_ban_time` | number | `30` | Minutes banned |
-| `upload_part_size` | number | `16` | S3 multipart size, MB, min 5 |
-| `upload_concurrency` | number | `4` | Parts in parallel per upload |
-| `download_part_size` | number | `16` | S3 ranged download size, MB, min 5 |
-| `download_concurrency` | number | `4` | Parts in parallel per download |
-| `password_length` | number | `16` | Generated user and admin passwords. **Changing this rotates every credential** |
-| `admin_username` | string | `"sftpadmin"` | Web admin. In the loaddata document, so it survives rebuilds |
-| `admin_permissions` | list(string) | `["*"]` | Narrow to `view_*` for an inspection-only panel |
-| `bucket_force_destroy` | bool | `false` | Allow deleting a non-empty bucket. Keep false with real data |
-| `abort_incomplete_multipart_days` | number | `7` | Aborts orphaned upload parts - billed but invisible in the console |
-| `bucket_versioning` | bool | `false` | Keep every object version. Off by default - partners re-send the same filename and each version is billed |
-| `noncurrent_version_expiration_days` | number | `30` | Deletes old object versions. Only applies when `bucket_versioning` is true |
-| `log_retention_days` | number | `30` | CloudWatch Logs retention |
-
-## Outputs
-
-| Name | Purpose |
-|---|---|
-| `endpoint` | Address partners connect to (the Elastic IP) |
-| `port` | SFTP port |
-| `usernames` | Map of username → S3 prefix |
-| `passwords_secret_arn` | Secret with the username → password map |
-| `admin_secret_arn` | Secret with the web admin credentials |
-| `host_public_keys` | SSH host public keys, for partners' `known_hosts` |
-| `bucket_name` | Bucket backing the SFTP tree |
-| `instance_id` | For `aws ssm start-session` |
-| `security_group_id` | To reference from other security groups |
-| `log_group_name` | SFTPGo and bootstrap logs |
-| `sync_document_name` | SSM document that pushes user changes |
-
----
-
-## What it creates
-
-```
-                      partners
-                         │ TCP 22
-                    ┌────▼─────┐
-                    │ Elastic  │  stable address - partner IP allowlists
-                    │   IP     │  survive instance replacement
-                    └────┬─────┘
-   ┌─────────────────────▼──────────────────────┐
-   │  EC2  t4g.medium  Amazon Linux 2023 arm64  │
-   │  SFTPGo, unprivileged, CAP_NET_BIND_SERVICE│
-   │  admin UI + REST API on 127.0.0.1:8080     │
-   └──────┬──────────────────────┬──────────────┘
-          │ instance role        │ SSM
-    ┌─────▼─────┐        ┌───────▼────────┐
-    │    S3     │        │ Secrets Manager│  host keys, user document,
-    │  bucket   │        │   (4 secrets)  │  passwords, admin creds
-    └───────────┘        └────────────────┘
-```
-
-Plus: security group, IAM role, CloudWatch log group, and the SSM document that pushes
-user changes.
-
-**No alarms.** The log group is the whole of it - `make sftp-logs` shows every auth
-attempt with its source IP.
-
----
-
-## How it works
-
-### Storage
-
-**S3 is a native SFTPGo backend, not a FUSE mount.** Mountpoint for S3 supports no
-random writes and no append; SFTP clients resume transfers, rename in place and write
-out of order as a matter of course, so a FUSE mount produces intermittent,
-client-specific corruption. SFTPGo talks to S3 through the AWS SDK with real multipart
-uploads - no POSIX layer misrepresenting object storage.
-
-Each user is confined to their own key prefix. The instance role is scoped to the
-bucket; SFTPGo enforces the per-user boundary inside it.
-
-**`key_prefix` is a view, not a folder.** S3 has no directories - only keys. The prefix
-chroots a user over keys that already exist, so pointing two users at an existing prefix
-grants shared access to it and creates nothing. It is a single chroot per user, though,
-so a user gets either their own prefix or a shared one, not both; serving both would
-need SFTPGo virtual folders, which this module does not currently expose.
-
-### Users and the admin
-
-`users` is rendered into an SFTPGo backup document, stored in Secrets Manager, and
-imported at boot with `SFTPGO_LOADDATA_MODE=0` (add new, update existing). The web admin
-is in the same document, so it survives instance replacement instead of dropping you
-back on SFTPGo's first-run setup page.
-
-**Changes are pushed to the running service, not baked into the host.**
-`null_resource.sync_users` triggers on the secret's `version_id` and runs an SSM document
-on the instance, which `POST`s the document to
-`http://127.0.0.1:8080/api/v2/loaddata?mode=0`. Applied live - no restart, no downtime,
-a couple of seconds. Because the command runs *on* the host, the admin API stays bound
-to loopback and nothing is exposed.
-
-**If API auth fails, it falls back to writing the document to disk and restarting.**
-That path needs no authentication, which matters because rotating the admin password
-would otherwise lock the API path out of its own update - the sync authenticates with
-the very credential it is responsible for setting. The fallback costs a restart (a few
-seconds, and it does drop in-flight transfers) and then self-heals: the next sync is back
-on the zero-downtime path.
-
-A failed sync fails the apply, so Terraform never claims to have converged when it
-hasn't.
-
-The instance is only replaced for host-level changes: `ami_id`, `instance_type`,
-`root_volume_size`, `sftp_port`, or the SFTPGo tuning variables.
-
-### Host keys
-
-Generated by Terraform and stored in Secrets Manager, **not** made on the instance. If
-the host generated its own, every replacement would change the fingerprint and every
-partner's `known_hosts` check would fail at once - and worse, partners would learn to
-click through the warning, which destroys the protection entirely.
-
-Trade-off: the private host keys live in Terraform state. **State access is equivalent to
-host-key access**, so the state bucket deserves the same care as the secret.
-
-### Credentials
-
-**No credentials in `user_data`** - it is readable by anything that can reach IMDS, so it
-carries only secret ARNs. The host fetches keys and passwords at boot with its instance
-role, and `SFTPGO_LOADDATA_CLEAN=1` deletes the plaintext once imported.
-
-### Administration
-
-**SSM, not SSH.** The OS `sshd` is disabled so port 22 belongs to SFTPGo. No admin key
-pair to rotate, no second listener to harden, every session in CloudTrail.
-
-The admin UI and REST API bind `127.0.0.1:8080` only:
+**3. Apply**
 
 ```bash
-aws ssm start-session --target <instance-id> \
-  --document-name AWS-StartPortForwardingSession \
-  --parameters '{"portNumber":["8080"],"localPortNumber":["8080"]}'
-# then browse http://localhost:8080/web/admin
+terraform apply
+terraform output -json | ./scripts/sftpctl info
 ```
 
-An internet-exposed admin panel on the box holding every partner credential is not a
-trade worth making.
+```
+endpoint: 203.0.113.25
+port:     22
+bucket:   <your-project>-<env>-sftp
+users:
+  - <username>
+```
 
-**Treat the panel as read-only** - connection status, transfer history, quota usage,
-defender bans. Users created there are overwritten by the next sync.
+Give the partner the endpoint, their username, and their password
+(`sftpctl password --user <username>`). That is the whole setup.
 
----
+Everything else has a working default: instance type, AMI, storage layout, logging and
+tuning are all resolved for you. See [Inputs](#inputs) for what you can override.
+
+> **The subnet must be public.** It needs a route to an internet gateway, because
+> partners have to reach it and the host pulls packages and talks to AWS APIs without NAT.
+
+> **By default the SFTP port is open to the whole internet.** Set
+> `allowed_cidr_blocks` to your partners' egress IPs before going live.
 
 ## Operator commands
 
-The module ships **`scripts/sftpctl`** - one self-contained script covering everything you do to a run an endpoint.
+The module ships **`scripts/sftpctl`** - one self-contained file covering everything you
+do day to day. It reads `terraform output -json` on stdin, so it works with Terraform or
+Terragrunt, from any directory.
 
-### Setting it up in your project
+### What to copy
 
-**1. Copy `scripts/sftpctl` into your project's `scripts/` folder** and make it
-executable. Pull it straight from the tag you pinned the module to:
+**Copy this:** `scripts/sftpctl` → your repo, anywhere you keep scripts.
 
 ```bash
 VERSION=v0.0.1
@@ -276,172 +98,202 @@ chmod +x infrastructure/scripts/sftpctl
 git add infrastructure/scripts/sftpctl
 ```
 
-Or, if you have the repo checked out locally:
+### Expose the outputs
 
-```bash
-cp ../terraform-aws-sftp/scripts/sftpctl infrastructure/scripts/sftpctl
-chmod +x infrastructure/scripts/sftpctl
-```
-
-One self-contained file. It shells out to `aws`, `python3` and `ssh-keygen`, all of which
-your project already needs. Re-copy it when you bump the module version.
-
-**2. Expose the module's outputs.** None of them are sensitive, so one block does it:
+`sftpctl` needs the module's outputs. One block is enough - none of them are secret,
+the credentials are Secrets Manager ARNs, not values:
 
 ```hcl
-# stack/outputs.tf
 output "sftp" {
   value = module.sftp
 }
 ```
 
-Prefer explicit outputs? `sftpctl` also reads flat ones (`sftp_endpoint`,
-`sftp_instance_id`, …) - see [Output shapes](#output-shapes).
-
-**3. Add these targets to your Makefile:**
+### Add these Makefile targets
 
 ```make
-#-----------------------------------------------------------------------------
-#  SFTP  (terraform-aws-sftp)
-#-----------------------------------------------------------------------------
-SFTPCTL = $(SCRIPTS)/sftpctl
+SFTPCTL = infrastructure/scripts/sftpctl
 
-## replace the instance (~2 min). For AMI/instance changes, or to purge users
-## no longer declared. EIP, host keys, bucket and users all survive
-sftp-rebuild:
-	@cd $(TERRAGRUNT_DIR) && terragrunt run -- apply -replace='module.sftp.aws_instance.this'
-
-## everything else: info, admin, admin-password, password, hostkeys,
-## known-hosts, shell, logs, sync
+## everything: info, admin, admin-password, password, shell, logs, sync
 sftp-%:
 	@$(MAKE) -s tfoutput | $(SFTPCTL) $* \
-		--profile $(_AWS_PROFILE) --region $(_AWS_REGION) --user "$(user)"
+		--profile $(AWS_PROFILE) --region $(AWS_REGION) --user "$(user)"
+
+## replace the instance (~2 min) - for instance-type or volume changes
+sftp-rebuild:
+	@cd $(TERRAGRUNT_DIR) && terragrunt run -- apply -replace='module.sftp.aws_instance.sftp_ec2'
 ```
 
-`$(SCRIPTS)` is already defined in the TechHolding Makefile template as
-`infrastructure/scripts`; point `SFTPCTL` wherever you actually put the file.
-
-The single pattern rule covers every subcommand. `sftp-rebuild` is explicit because it
-drives terragrunt rather than the script, and an explicit target beats a pattern rule.
+`tfoutput` is whatever already prints `terraform output -json` in your Makefile. The one
+pattern rule covers every subcommand - `sftp-rebuild` is separate because it drives
+Terraform, not the script.
 
 ### Commands
 
-| Command | Does |
+| Command | What it does |
 |---|---|
-| `make sftp-info` | endpoint, port, bucket, users, host key fingerprints |
-| `make sftp-admin` | SSM tunnel to the admin panel, printing credentials first |
-| `make sftp-admin-password` | just the admin credentials |
-| `make sftp-password user=X` | one user's generated password |
-| `make sftp-hostkeys` | fingerprints, to give partners out-of-band |
-| `make sftp-known-hosts` | pre-pin lines - required for automated clients |
+| `make sftp-info` | endpoint, port, bucket, users |
+| `make sftp-password user=acme-corp` | that user's generated password |
+| `make sftp-admin` | opens the web admin panel on `localhost:8080` via SSM |
+| `make sftp-admin-password` | admin panel credentials |
 | `make sftp-shell` | shell on the host over SSM, no SSH |
-| `make sftp-logs` | tail SFTPGo - every auth attempt with its source IP |
-| `make sftp-sync` | manual retry if the apply-time user push failed |
+| `make sftp-logs` | tail the live log - every auth attempt with its source IP |
+| `make sftp-sync` | re-push the **current** secret. Does not read your YAML - edit a user then run `terraform apply` |
 | `make sftp-rebuild` | replace the instance |
 
-Or call it directly, without Make:
+Without Make:
 
 ```bash
 terraform output -json | ./scripts/sftpctl info
+terraform output -json | ./scripts/sftpctl password --user acme-corp
 ```
 
-### Output shapes
+---
+## Inputs
 
-`sftpctl` resolves each field across three shapes, so it works however you expose
-things:
+### Required
 
-| Shape | Example output | Lookup |
+| Name | Type | Description |
 |---|---|---|
-| one object | `output "sftp" { value = module.sftp }` | `.sftp.value.endpoint` |
-| flat, prefixed | `output "sftp_endpoint" { … }` | `.sftp_endpoint.value` |
-| flat, bare | `output "endpoint" { … }` | `.endpoint.value` |
+| `name` | `string` | Prefix for every resource, e.g. `"myproject-dev"` |
+| `vpc_id` | `string` | Existing VPC to attach the host to |
+| `subnet_id` | `string` | Existing **public** subnet |
 
-Pass `--prefix NAME` if yours is not `sftp`. When a field cannot be found it prints
-every name it tried and the output block to add.
+### Common
 
-### Why a copy rather than an install
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `users` | `list(object)` | `[]` | User definitions - see [the `users` object](#the-users-object) |
+| `allowed_cidr_blocks` | `list(string)` | `["0.0.0.0/0"]` | Who may reach the SFTP port. **Narrow this** |
+| `tags` | `map(string)` | `{}` | Extra tags, merged with provider `default_tags` |
+| `sftp_port` | `number` | `22` | Port to listen on |
+| `log_retention_days` | `number` | `30` | CloudWatch Logs retention |
 
-The script lives inside the module, but there is no reliable way for a consuming
-Makefile to reach it: Terragrunt runs Terraform inside `.terragrunt-cache/<hash>/<hash>/`
-and Terraform names the module directory after your *module block*, so any path would
-depend on both. A one-file copy is boring and always works.
+### Compute
 
-It is also stable - `sftpctl` only reads Terraform outputs and calls the AWS CLI, so an
-older copy keeps working against a newer module unless an output is renamed. Re-copy it
-when you bump the module version.
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `instance_type` | `string` | `"t4g.medium"` | Must be arm64 (Graviton) |
+| `ami_id` | `string` | `null` | Resolved automatically to the latest Amazon Linux 2023 arm64. Set only alongside an `instance_type` of a different architecture |
+| `root_volume_size` | `number` | `20` | GB. Transfers stage on local disk, so this must exceed largest file × concurrent transfers |
 
-The Terraform provisioner uses its own in-module copy via `${path.module}`, which
-resolves correctly, so **`terraform apply` and CI never depend on your copy** - only
-humans do.
+### Storage
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `bucket_versioning` | `bool` | `false` | Keep every object version. **Set at creation - S3 cannot return a versioned bucket to unversioned** |
+| `abort_incomplete_multipart_days` | `number` | `7` | Aborts orphaned upload parts, which are billed but invisible in the console |
+| `noncurrent_version_expiration_days` | `number` | `14` | Deletes old versions. Only applies when `bucket_versioning` is true |
+
+### Credentials
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `password_length` | `number` | `16` | Generated user and admin passwords. **Changing this rotates every credential** |
+| `admin_username` | `string` | `"sftpadmin"` | Web admin panel login |
+
+### Tuning
+
+Defaults are fine for typical partner file exchange. Raise for large files over fast links.
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `sftpgo_version` | `string` | `"2.7.5"` | Server version to install |
+| `upload_part_size` | `number` | `16` | S3 multipart size in MB, min 5 |
+| `upload_concurrency` | `number` | `4` | Parts in parallel per upload |
+| `download_part_size` | `number` | `16` | S3 ranged download size in MB, min 5 |
+| `download_concurrency` | `number` | `4` | Parts in parallel per download |
+
+### The `users` object
+
+One object per user. Only `username` is required.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `username` | `string` | **required** | Login name, and the default S3 prefix |
+| `enable_password` | `bool` | `false` | Generate a password and allow password auth |
+| `public_keys` | `list(string)` | `[]` | Authorized SSH keys, `authorized_keys` format |
+| `key_prefix` | `string` | `"<username>/"` | S3 prefix the user is confined to, must end in `/`. Set `""` for the whole bucket |
+| `permissions` | `list(string)` | full read/write | `list`, `download`, `upload`, `overwrite`, `delete`, `rename`, `create_dirs` |
+| `quota_size` | `number` | `0` | Max stored bytes, 0 for unlimited |
+| `max_sessions` | `number` | `0` | Max concurrent sessions, 0 for unlimited |
+| `upload_bandwidth` | `number` | `0` | Upload throttle KB/s, 0 for unlimited |
+| `download_bandwidth` | `number` | `0` | Download throttle KB/s, 0 for unlimited |
+| `allowed_ip` | `list(string)` | `[]` | Source CIDRs **this user** may log in from. Narrower than `allowed_cidr_blocks`, which gates the port for everyone |
+| `expiration_date` | `number` | `0` | Account expiry in unix milliseconds, 0 for never |
+| `description` | `string` | `""` | Note shown in the admin panel |
+
+**Authentication follows from what you set** - there is no mode to choose:
+
+| You set | They authenticate with |
+|---|---|
+| `enable_password: true` | password |
+| `public_keys: [...]` | key |
+| both | either one, their choice |
+
+Every user needs at least one of the two, or the plan fails.
 
 ---
-## Sizing
 
-`t4g.medium` is 2 vCPU / 4 GiB, up to 5 Gbps. Graviton has hardware AES, so network and
-per-transfer memory bind before CPU.
+## Outputs
 
-SFTPGo holds roughly `upload_part_size × upload_concurrency` per active upload - at the
-defaults (16 MB × 4) that is **64 MB per transfer**, so five concurrent uploads is
-~320 MB. Comfortable on 4 GiB.
-
-**User count costs nothing** - users are rows in SQLite. Only *concurrent sessions*
-consume resources.
-
-Two burstable caveats:
-
-- `cpu_credits` defaults to `unlimited`, which bills surplus credits rather than
-  throttling. Watch `CPUSurplusCreditsCharged` on the instance; if you are paying it
-  steadily, move to `c7g.large` (~$53/mo, 12.5 Gbps, no credit model).
-- T-family **network** bandwidth is also burstable. Sustained multi-Gbps needs a
-  non-burstable family regardless of CPU credits.
-
-`root_volume_size` must exceed largest expected file × concurrent transfers, because
-transfers stage on local disk even with an S3 backend.
+| Name | Description |
+|---|---|
+| `endpoint` | Address partners connect to (the Elastic IP) |
+| `port` | SFTP port |
+| `usernames` | Map of username to the S3 prefix each is confined to |
+| `bucket_name` | Bucket backing the SFTP tree |
+| `passwords_secret_arn` | Secret holding the username → password map |
+| `admin_secret_arn` | Secret holding the admin panel credentials |
+| `instance_id` | For `aws ssm start-session` |
+| `log_group_name` | CloudWatch log group |
+| `sync_document_name` | SSM document that pushes user changes |
 
 ---
 
-## Availability
+## Cost
 
-Single instance, single AZ - deliberate, to keep the cost at ~$33/month. On hardware
-failure the endpoint is down until replaced (~2 minutes). The EIP, host keys, bucket,
-users and admin all survive, because none of them live on the host.
-
-Upgrade path if that RTO is unacceptable:
-
-1. **ASG of one** across two subnets - 2-4 minute self-heal, no cost change.
-2. **Two nodes behind an NLB** with RDS as the shared data provider - active/active,
-   adds ~$40/mo.
-
-Moving the data provider to RDS is also what you would do if you wanted the admin panel
-to genuinely own users rather than Terraform.
-
----
-
-## Protocols
-
-**SFTP only.** `sftpgo.json` sets `ftpd.bindings = []` and every user denies `FTP`, `DAV`
-and `HTTP`.
-
-Adding FTP back means an `ftpd` binding, security-group rules for the control port and
-the passive range, dropping `FTP` from `denied_protocols`, and - for FTPS rather than
-cleartext FTP - a certificate on the host plus `force_passive_ip` set to the Elastic IP.
-
----
-
-## Cost, us-west-2
+**us-west-2, one endpoint, any number of users:**
 
 | Line item | Monthly |
 |---|---|
-| t4g.medium, 730 h on-demand | $24.82 |
+| EC2 t4g.medium, 730 h @ $0.0336 | $24.53 |
 | EBS gp3, 20 GB | $1.60 |
 | Elastic IP | $3.65 |
 | Secrets Manager, 4 secrets | $1.60 |
 | CloudWatch Logs, ~2 GB | $1.00 |
-| **Fixed total** | **~$33** |
+| **Fixed total** | **~$32** |
 
-Plus S3 at $0.023/GB-month, and $0.09/GB internet egress on downloads after the first
-100 GB. Uploads are free. A 3-year Reserved Instance or Compute Savings Plan takes
-compute to about $10/month.
+Plus S3 storage at $0.023/GB-month. **Uploads are free**; downloads are free for the
+first 100 GB/month, then $0.09/GB.
+
+### Versus AWS Transfer Family
+
+Transfer Family bills **$0.30/hour** per enabled SFTP endpoint and **$0.04/GB** in *both*
+directions. Same workload - 500 GB stored, 500 GB uploaded, 100 GB downloaded a month:
+
+| | This module | Transfer Family |
+|---|---|---|
+| Endpoint | $32 | **$219** |
+| Upload 500 GB | free | $20.00 |
+| Download 100 GB | free (first 100 GB) | $4.00 |
+| S3 storage 500 GB | $11.50 | $11.50 |
+| **Monthly** | **~$44** | **~$255** |
+---
+
+## Requirements
+
+| | |
+|---|---|
+| Terraform | **≥ 1.14** |
+| Providers | `aws >= 6.56`, `tls >= 4.3`, `random >= 3.9`, `null >= 3.2` - declare all four in your root `required_providers` |
+| Subnet | **public**, with a route to an internet gateway |
+| IAM | whoever runs Terraform needs `ssm:SendCommand` and `ssm:GetCommandInvocation`, because user changes are pushed over SSM. In CI, add these to the OIDC role |
 
 ---
 
+## More
+
+See **[EXAMPLE.md](EXAMPLE.md)** for users from YAML vs inline, permission recipes
+(read-only, write-only, shared folders), onboarding and offboarding partners, and the
+full command reference.

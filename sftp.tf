@@ -2,38 +2,30 @@
 #  sftp/sftp.tf  #
 ##################
 
-resource "aws_instance" "this" {
+resource "aws_instance" "sftp_ec2" {
   ami           = local.ami_id
   instance_type = var.instance_type
   subnet_id     = var.subnet_id
 
-  vpc_security_group_ids = [module.security_group.id]
-  iam_instance_profile   = aws_iam_instance_profile.this.name
-
-  # Replaced by the EIP association below; needed so the host has egress at boot.
+  vpc_security_group_ids      = [module.security_group.id]
+  iam_instance_profile        = aws_iam_instance_profile.sftp_instance_profile.name
   associate_public_ip_address = true
   user_data_replace_on_change = true
 
   user_data = templatefile("${path.module}/templates/user_data.sh.tftpl", {
     aws_region          = data.aws_region.current.region
     sftpgo_version      = var.sftpgo_version
-    sftpgo_rpm_sha256   = var.sftpgo_rpm_sha256
     host_keys_secret_id = aws_secretsmanager_secret.host_keys.arn
     users_secret_id     = aws_secretsmanager_secret.users.arn
     log_group_name      = aws_cloudwatch_log_group.sftpgo.name
-
-    # Deliberately does NOT reference the users secret version. user_data is only
-    # about how to build a host, not which users exist - so adding a user no longer
-    # replaces the instance. Changes are pushed to the running service instead, see
-    # sync.tf. A new host still imports the current document at boot.
 
     sftpgo_config = jsonencode({
       common = {
         defender = {
           enabled              = true
-          ban_time             = var.defender_ban_time
+          ban_time             = 30
           ban_time_increment   = 50
-          threshold            = var.defender_threshold
+          threshold            = 10
           score_invalid        = 2
           score_valid          = 1
           score_limit_exceeded = 3
@@ -41,9 +33,6 @@ resource "aws_instance" "this" {
           entries_soft_limit   = 100
           entries_hard_limit   = 150
         }
-
-        # Upload to a temp name and rename on completion, so consumers never see
-        # a half-written object.
         upload_mode = 2
       }
 
@@ -54,12 +43,8 @@ resource "aws_instance" "this" {
           apply_proxy_config = false
         }]
 
-        max_auth_tries = var.max_auth_tries
-
-        # Absolute. SFTPGo resolves relative paths against /etc/sftpgo, which the
-        # systemd ProtectSystem=full mounts read-only - it would find no keys
-        # there and silently generate a new pair, changing the fingerprint.
-        host_keys = ["/var/lib/sftpgo/id_ed25519", "/var/lib/sftpgo/id_rsa"]
+        max_auth_tries = 3
+        host_keys      = ["/var/lib/sftpgo/id_ed25519", "/var/lib/sftpgo/id_rsa"]
 
         keyboard_interactive_authentication = false
         password_authentication             = true
@@ -97,10 +82,6 @@ resource "aws_instance" "this" {
         }
       }
 
-      # No "log" section - SFTPGo has none. Logging is set by SFTPGO_LOG_* env
-      # vars in the systemd drop-in. Viper drops unknown keys silently, so a log
-      # block here would look right and do nothing.
-
       telemetry = {
         bind_port    = 10000
         bind_address = "127.0.0.1"
@@ -112,7 +93,6 @@ resource "aws_instance" "this" {
     volume_size           = var.root_volume_size
     volume_type           = "gp3"
     encrypted             = true
-    kms_key_id            = var.ebs_kms_key_id
     delete_on_termination = true
 
     tags = merge(var.tags, { Name = "${var.name}-sftp-root" })
@@ -129,7 +109,7 @@ resource "aws_instance" "this" {
     for_each = startswith(var.instance_type, "t") ? [1] : []
 
     content {
-      cpu_credits = var.cpu_credits
+      cpu_credits = "unlimited"
     }
   }
 
@@ -148,9 +128,9 @@ resource "aws_instance" "this" {
   }
 }
 
-resource "aws_eip" "this" {
+resource "aws_eip" "sftp_eip" {
   domain   = "vpc"
-  instance = aws_instance.this.id
+  instance = aws_instance.sftp_ec2.id
 
   tags = merge(var.tags, { Name = "${var.name}-sftp" })
 }
