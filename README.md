@@ -24,7 +24,7 @@ Two files. Fill in three values, apply.
 
 ```hcl
 module "sftp" {
-  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v0.0.1"
+  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v1.0.0"
 
   name = "<your-project>-<env>"             # prefix for every resource
 
@@ -52,6 +52,8 @@ username: <username>
 description: <what this account is for>
 enable_password: true
 ```
+
+See [the `users` object](#the-users-object) below for the full field list.
 
 **3. Apply**
 
@@ -91,7 +93,7 @@ Terragrunt, from any directory.
 **Copy this:** `scripts/sftpctl` → your repo, anywhere you keep scripts.
 
 ```bash
-VERSION=v0.0.1
+VERSION=v1.0.0
 curl -fsSL -o infrastructure/scripts/sftpctl \
   https://raw.githubusercontent.com/TechHoldingLLC/terraform-aws-sftp/$VERSION/scripts/sftpctl
 chmod +x infrastructure/scripts/sftpctl

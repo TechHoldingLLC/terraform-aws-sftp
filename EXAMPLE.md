@@ -33,7 +33,7 @@ infrastructure/
 ```hcl
 # sftp.tf
 module "sftp" {
-  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v0.0.1"
+  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v1.0.0"
 
   name      = var.prefix
   vpc_id    = data.aws_vpc.this.id
@@ -64,7 +64,7 @@ Fine for two or three stable users that rarely change.
 
 ```hcl
 module "sftp" {
-  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v0.0.1"
+  source = "git::https://github.com/TechHoldingLLC/terraform-aws-sftp.git?ref=v1.0.0"
 
   name      = var.prefix
   vpc_id    = data.aws_vpc.this.id
